@@ -1,0 +1,165 @@
+:root {
+  color-scheme: light dark;
+
+  --neu-bg-light: #e6ebf2;
+  --neu-bg-dark: #1d212b;
+  --neu-surface-light: #ecf1f7;
+  --neu-surface-dark: #232834;
+  --neu-surface-2-light: #dfe6ef;
+  --neu-surface-2-dark: #191d26;
+  --neu-sh-l-light: rgba(255, 255, 255, 0.88);
+  --neu-sh-l-dark: rgba(255, 255, 255, 0.055);
+  --neu-sh-d-light: rgba(163, 177, 198, 0.58);
+  --neu-sh-d-dark: rgba(8, 11, 17, 0.72);
+  --neu-grid-light: rgba(30, 41, 59, 0.048);
+  --neu-grid-dark: rgba(226, 232, 240, 0.042);
+
+  --neu-text-light: #1e293b;
+  --neu-text-dark: #eef2f7;
+  --neu-muted-light: #475569;
+  --neu-muted-dark: #94a3b8;
+  --neu-accent-light: #0284c7;
+  --neu-accent-dark: #38bdf8;
+  --neu-accent-ink-light: #ffffff;
+  --neu-accent-ink-dark: #0a1929;
+  --neu-accent-soft-light: #d7ecfa;
+  --neu-accent-soft-dark: #16324a;
+  --neu-accent-soft-ink-light: #075985;
+  --neu-accent-soft-ink-dark: #bae6fd;
+
+  --ok-light: #15803d;
+  --ok-dark: #4ade80;
+  --ok-bg-light: #dcfce7;
+  --ok-bg-dark: #122d21;
+  --warn-light: #b45309;
+  --warn-dark: #fbbf24;
+  --warn-bg-light: #fef3c7;
+  --warn-bg-dark: #2d2410;
+  --err-light: #b91c1c;
+  --err-dark: #f87171;
+  --err-bg-light: #fee2e2;
+  --err-bg-dark: #32181c;
+  --agn-light: #6d28d9;
+  --agn-dark: #c4b5fd;
+  --agn-bg-light: #ede9fe;
+  --agn-bg-dark: #292042;
+
+  --neu-bg: var(--neu-bg-light);
+  --neu-surface: var(--neu-surface-light);
+  --neu-surface-2: var(--neu-surface-2-light);
+  --neu-sh-l: var(--neu-sh-l-light);
+  --neu-sh-d: var(--neu-sh-d-light);
+  --neu-grid: var(--neu-grid-light);
+  --neu-text: var(--neu-text-light);
+  --neu-muted: var(--neu-muted-light);
+  --neu-accent: var(--neu-accent-light);
+  --neu-accent-ink: var(--neu-accent-ink-light);
+  --neu-accent-soft: var(--neu-accent-soft-light);
+  --neu-accent-soft-ink: var(--neu-accent-soft-ink-light);
+  --ok: var(--ok-light);
+  --ok-bg: var(--ok-bg-light);
+  --warn: var(--warn-light);
+  --warn-bg: var(--warn-bg-light);
+  --err: var(--err-light);
+  --err-bg: var(--err-bg-light);
+  --agn: var(--agn-light);
+  --agn-bg: var(--agn-bg-light);
+
+  &:has(> head > meta[name="color-scheme"][content="dark"]) {
+    color-scheme: dark;
+    --neu-bg: var(--neu-bg-dark);
+    --neu-surface: var(--neu-surface-dark);
+    --neu-surface-2: var(--neu-surface-2-dark);
+    --neu-sh-l: var(--neu-sh-l-dark);
+    --neu-sh-d: var(--neu-sh-d-dark);
+    --neu-grid: var(--neu-grid-dark);
+    --neu-text: var(--neu-text-dark);
+    --neu-muted: var(--neu-muted-dark);
+    --neu-accent: var(--neu-accent-dark);
+    --neu-accent-ink: var(--neu-accent-ink-dark);
+    --neu-accent-soft: var(--neu-accent-soft-dark);
+    --neu-accent-soft-ink: var(--neu-accent-soft-ink-dark);
+    --ok: var(--ok-dark);
+    --ok-bg: var(--ok-bg-dark);
+    --warn: var(--warn-dark);
+    --warn-bg: var(--warn-bg-dark);
+    --err: var(--err-dark);
+    --err-bg: var(--err-bg-dark);
+    --agn: var(--agn-dark);
+    --agn-bg: var(--agn-bg-dark);
+  }
+
+  &:has(> head > meta[name="color-scheme"][content="light"]) {
+    color-scheme: light;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    &:not(:has(> head > meta[name="color-scheme"][content="light"])) {
+      --neu-bg: var(--neu-bg-dark);
+      --neu-surface: var(--neu-surface-dark);
+      --neu-surface-2: var(--neu-surface-2-dark);
+      --neu-sh-l: var(--neu-sh-l-dark);
+      --neu-sh-d: var(--neu-sh-d-dark);
+      --neu-grid: var(--neu-grid-dark);
+      --neu-text: var(--neu-text-dark);
+      --neu-muted: var(--neu-muted-dark);
+      --neu-accent: var(--neu-accent-dark);
+      --neu-accent-ink: var(--neu-accent-ink-dark);
+      --neu-accent-soft: var(--neu-accent-soft-dark);
+      --neu-accent-soft-ink: var(--neu-accent-soft-ink-dark);
+      --ok: var(--ok-dark);
+      --ok-bg: var(--ok-bg-dark);
+      --warn: var(--warn-dark);
+      --warn-bg: var(--warn-bg-dark);
+      --err: var(--err-dark);
+      --err-bg: var(--err-bg-dark);
+      --agn: var(--agn-dark);
+      --agn-bg: var(--agn-bg-dark);
+    }
+  }
+
+  @supports (color: light-dark(white, black)) {
+    --neu-bg: light-dark(var(--neu-bg-light), var(--neu-bg-dark));
+    --neu-surface: light-dark(var(--neu-surface-light), var(--neu-surface-dark));
+    --neu-surface-2: light-dark(var(--neu-surface-2-light), var(--neu-surface-2-dark));
+    --neu-sh-l: light-dark(var(--neu-sh-l-light), var(--neu-sh-l-dark));
+    --neu-sh-d: light-dark(var(--neu-sh-d-light), var(--neu-sh-d-dark));
+    --neu-grid: light-dark(var(--neu-grid-light), var(--neu-grid-dark));
+    --neu-text: light-dark(var(--neu-text-light), var(--neu-text-dark));
+    --neu-muted: light-dark(var(--neu-muted-light), var(--neu-muted-dark));
+    --neu-accent: light-dark(var(--neu-accent-light), var(--neu-accent-dark));
+    --neu-accent-ink: light-dark(var(--neu-accent-ink-light), var(--neu-accent-ink-dark));
+    --neu-accent-soft: light-dark(var(--neu-accent-soft-light), var(--neu-accent-soft-dark));
+    --neu-accent-soft-ink: light-dark(var(--neu-accent-soft-ink-light), var(--neu-accent-soft-ink-dark));
+    --ok: light-dark(var(--ok-light), var(--ok-dark));
+    --ok-bg: light-dark(var(--ok-bg-light), var(--ok-bg-dark));
+    --warn: light-dark(var(--warn-light), var(--warn-dark));
+    --warn-bg: light-dark(var(--warn-bg-light), var(--warn-bg-dark));
+    --err: light-dark(var(--err-light), var(--err-dark));
+    --err-bg: light-dark(var(--err-bg-light), var(--err-bg-dark));
+    --agn: light-dark(var(--agn-light), var(--agn-dark));
+    --agn-bg: light-dark(var(--agn-bg-light), var(--agn-bg-dark));
+  }
+
+  --neu-raised: 6px 6px 14px var(--neu-sh-d), -6px -6px 14px var(--neu-sh-l);
+  --neu-raised-sm: 4px 4px 9px var(--neu-sh-d), -4px -4px 9px var(--neu-sh-l);
+  --neu-inset: inset 3px 3px 7px var(--neu-sh-d), inset -3px -3px 7px var(--neu-sh-l);
+  --neu-inset-sm: inset 2px 2px 5px var(--neu-sh-d), inset -2px -2px 5px var(--neu-sh-l);
+
+  accent-color: var(--neu-accent);
+  scrollbar-color: var(--neu-muted) var(--neu-surface-2);
+}
+
+@supports not (scrollbar-color: auto) {
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: var(--neu-muted);
+    border-radius: 9999px;
+  }
+  ::-webkit-scrollbar-track {
+    background: var(--neu-surface-2);
+  }
+}

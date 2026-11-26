@@ -1,0 +1,21 @@
+[Unit]
+Description=KaRouter AI Gateway (Go + SQLite WAL)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=karouter
+Group=karouter
+WorkingDirectory=/opt/karouter
+ExecStart=/opt/karouter/karouter-linux --listen 0.0.0.0:8031 --db /opt/karouter/gateway.db
+Restart=always
+RestartSec=3
+LimitNOFILE=65535
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/opt/karouter
+
+[Install]
+WantedBy=multi-user.target

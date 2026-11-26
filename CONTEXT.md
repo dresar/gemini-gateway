@@ -6,8 +6,8 @@ Primary Uplink: Google Gemini OpenAI-compatible endpoint (`https://generativelan
 Fallback Uplink: Legacy OAuth uplink (`https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse`) preserved strictly as final fallback only if all keys in the pool are dead or exhausted.
 
 ## 2. Binary & Runtime Constraints
-- Binary: `geminigw` built from `cmd/main.go`.
-- Compiler: `/opt/data/tools/go/bin/go build -ldflags="-s -w" -o geminigw cmd/main.go`.
+- Binary: `geminigw` built from package `./cmd` (split into modular files `< 1,000` lines each; see `cmd/README.md`).
+- Compiler: `/opt/data/tools/go/bin/go build -ldflags="-s -w" -o geminigw ./cmd`.
 - Target: Binary size < 10MB, Runtime VmRSS < 15MB.
 - Standard library ONLY (`net/http`, `os/exec`, `encoding/json`, `time`, `crypto/rand`, `math/rand`, `sync`, etc.). No external frameworks.
 - STRICT RULE: NOKOMEN (Zero comments in any Go source file).

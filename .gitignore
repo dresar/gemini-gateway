@@ -1,8 +1,34 @@
 geminigw
+geminigw.exe
 .env
+.env.*
+!.env.example
 worktrees/
 keys.pool
+agnes_keys.pool
 pool_state.json
+router_state.json
+gateway.db
+gateway.db-wal
+gateway.db-shm
+*.db
+*.db-wal
+*.db-shm
 *.pool
 *state*.json
+web/node_modules/
+web/.next/
+web/out/
+*.apk
+*.jks
+*.keystore
+mobile/.gradle/
+mobile/app/build/
+mobile/build/
+mobile/local.properties
 
+
+
+# Compiled Linux VPS binaries & archives
+karouter-linux
+*.tar.gz
