@@ -1,0 +1,8 @@
+geminigw
+.env
+worktrees/
+keys.pool
+pool_state.json
+*.pool
+*state*.json
+
