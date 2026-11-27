@@ -42,7 +42,7 @@ const (
 
 func (g *Gateway) selftest() {
 	req := &OpenAIRequest{
-		Model:     "auto",
+		Model:     "automodel",
 		Messages:  []OpenAIMessage{{Role: "user", Content: "jawab: OK"}},
 		MaxTokens: 16,
 	}

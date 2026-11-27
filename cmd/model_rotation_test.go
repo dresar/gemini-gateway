@@ -148,7 +148,7 @@ func TestExecuteRoutedChatModelRotation(t *testing.T) {
 
 	client := ClientKey{Name: "test", Scope: scopeGlobal, Enabled: true}
 	resp, trace, err := gw.executeRoutedChat(context.Background(), nil, &OpenAIRequest{
-		Model:    "auto",
+		Model:    "automodel",
 		Messages: []OpenAIMessage{{Role: "user", Content: "hi"}},
 	}, client, "")
 	if err != nil || resp == nil {
@@ -159,7 +159,7 @@ func TestExecuteRoutedChatModelRotation(t *testing.T) {
 	}
 
 	_, trace2, err := gw.executeRoutedChat(context.Background(), nil, &OpenAIRequest{
-		Model:    "auto",
+		Model:    "automodel",
 		Messages: []OpenAIMessage{{Role: "user", Content: "hi2"}},
 	}, client, "")
 	if err != nil {
@@ -167,5 +167,17 @@ func TestExecuteRoutedChatModelRotation(t *testing.T) {
 	}
 	if (trace2.Model != "m-ok-1" && trace2.Model != "m-ok-2") || trace2.Model == trace.Model {
 		t.Fatalf("expected turn 2 rotated to other healthy model (turn1=%q turn2=%q calls=%v)", trace.Model, trace2.Model, strings.Join(requested, ","))
+	}
+
+	_, items := gw.buildModelsCatalog(context.Background(), scopeGlobal, "", false)
+	var ids []string
+	for _, it := range items {
+		if id, _ := it["id"].(string); id != "" {
+			ids = append(ids, id)
+		}
+	}
+	joined := strings.Join(ids, ",")
+	if !strings.Contains(joined, "automodel") || strings.Contains(joined, ",auto,") || strings.Contains(joined, ",router,") {
+		t.Fatalf("expected automodel without auto/router aliases, got %v", ids)
 	}
 }

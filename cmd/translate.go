@@ -328,7 +328,7 @@ func isForeignAgentAlias(lower string) bool {
 func (g *Gateway) resolveUpstreamModel(prov *Provider, requestedModel, scope string, allProvs []*Provider) string {
 	m := strings.TrimSpace(requestedModel)
 	lower := strings.ToLower(m)
-	if m == "" || lower == "auto" || lower == "router" {
+	if isAutoModelAlias(lower) {
 		return prov.DefaultModel
 	}
 	if strings.HasPrefix(lower, prov.ID+"/") {

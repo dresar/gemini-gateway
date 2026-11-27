@@ -488,7 +488,7 @@ func (g *Gateway) executeRoutedChat(ctx context.Context, w http.ResponseWriter, 
 
 		baseTargetModel := g.resolveUpstreamModel(prov, req.Model, scope, providers)
 		trimmedReqModel := strings.TrimSpace(req.Model)
-		isAutoReq := trimmedReqModel == "" || strings.EqualFold(trimmedReqModel, "auto") || strings.EqualFold(trimmedReqModel, "router") || strings.EqualFold(trimmedReqModel, prov.ID)
+		isAutoReq := isAutoModelAlias(trimmedReqModel) || strings.EqualFold(trimmedReqModel, prov.ID)
 		rotateModels := prov.ModelRotationEnabled && s.ModelRotationMode != "off" && len(prov.RotationModels) > 0 && (isAutoReq || s.ModelRoutingPolicy == "always_rotate")
 		triedModels := make(map[string]bool)
 		var gemReq GeminiRequest
@@ -551,7 +551,7 @@ func (g *Gateway) executeRoutedChat(ctx context.Context, w http.ResponseWriter, 
 
 			callStart := time.Now()
 			allowGeminiModelFallback := !rotateModels && prov.APIType == apiTypeGemini &&
-				(targetModel == prov.DefaultModel || trimmedReqModel == "" || strings.EqualFold(trimmedReqModel, "auto") || strings.EqualFold(trimmedReqModel, "router"))
+				(targetModel == prov.DefaultModel || isAutoModelAlias(trimmedReqModel))
 			if req.Stream && w != nil {
 				var tokens int
 				var err error

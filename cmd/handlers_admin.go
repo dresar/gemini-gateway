@@ -457,7 +457,7 @@ func (g *Gateway) handleChatTest(w http.ResponseWriter, r *http.Request) {
 	}
 	model := strings.TrimSpace(body.Model)
 	if model == "" {
-		model = "auto"
+		model = "automodel"
 	}
 	req := &OpenAIRequest{
 		Model:     model,

@@ -44,7 +44,7 @@ export function AccessGuideAndModels({
   const [selectedKeyId, setSelectedKeyId] = useState<string>('auto');
   const [manualToken, setManualToken] = useState<string>('');
   const [showManualToken, setShowManualToken] = useState(false);
-  const [chosenModel, setChosenModel] = useState<string>('auto');
+  const [chosenModel, setChosenModel] = useState<string>('automodel');
 
   const [catalog, setCatalog] = useState<ModelsCatalogResponse | null>(null);
   const [modelLoading, setModelLoading] = useState(false);
@@ -109,7 +109,7 @@ export function AccessGuideAndModels({
   }, [loadModels]);
 
   const defaultSuggestedModel = useMemo(() => {
-    if (chosenModel && chosenModel !== 'auto') return chosenModel;
+    if (chosenModel && chosenModel !== 'automodel' && chosenModel !== 'auto') return chosenModel;
     const match = providers.find((p) => {
       if (!p.enabled) return false;
       if (effectiveScope === 'global') return true;
@@ -118,12 +118,12 @@ export function AccessGuideAndModels({
       }
       return p.id === effectiveScope;
     });
-    return match?.default_model || 'auto';
+    return match?.default_model || 'automodel';
   }, [chosenModel, providers, effectiveScope]);
 
   const promptPayload = useMemo(() => {
     const keyVal = tokenText;
-    const modelId = chosenModel || 'auto';
+    const modelId = chosenModel || 'automodel';
     const concreteModel = defaultSuggestedModel;
     const endpointsSummary = [
       `- OpenAI Chat Completions : ${originURL}/v1/chat/completions`,
@@ -246,7 +246,7 @@ Tolong setup & instal API key ini di environment / coding agent saya sekarang:
 
 • API Key  : ${keyVal}
 • Scope    : ${scopeTitle}
-• Model    : ${modelId} (gunakan "auto" untuk rotasi otomatis, atau "<provider>/<model_id>" untuk model spesifik)
+• Model    : ${modelId} (gunakan "automodel" untuk rotasi otomatis, atau "<provider>/<model_id>" untuk model spesifik)
 
 Endpoint Resmi:
 ${endpointsSummary}

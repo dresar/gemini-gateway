@@ -214,7 +214,7 @@ func (p *KeyPool) ProviderOrder(requestedModel, scope string) []*Provider {
 	}
 
 	lower := strings.ToLower(strings.TrimSpace(requestedModel))
-	isAuto := lower == "" || lower == "auto" || lower == "router"
+	isAuto := isAutoModelAlias(lower)
 
 	appendFallbacks := func(first *Provider) []*Provider {
 		out := []*Provider{first}
@@ -756,6 +756,11 @@ func (p *KeyPool) MarkModelCooldown(provID, model string, sec int64) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.modelCooldown[modelCooldownKey(provID, model)] = time.Now().Unix() + sec
+}
+
+func isAutoModelAlias(raw string) bool {
+	lower := strings.ToLower(strings.TrimSpace(raw))
+	return lower == "" || lower == "automodel" || lower == "auto" || lower == "router"
 }
 
 func (p *KeyPool) MarkModelOK(provID, model string) {

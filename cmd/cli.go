@@ -143,7 +143,7 @@ func runCLIMode(args []string) bool {
 		os.Exit(1)
 	}
 	if modelFlag == "" {
-		modelFlag = "auto"
+		modelFlag = "automodel"
 	}
 
 	if urlFlag != "" {
