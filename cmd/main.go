@@ -105,6 +105,7 @@ func (g *Gateway) handler() http.Handler {
 	mux.HandleFunc("/api/auth/logout", g.handleAuthLogout)
 	mux.HandleFunc("/api/auth/password", g.handleAuthPassword)
 	mux.HandleFunc("/api/status", g.handleStatus)
+	mux.HandleFunc("/api/usage", g.handleUsage)
 	mux.HandleFunc("/api/config", g.handleConfig)
 	mux.HandleFunc("/api/providers", g.handleProvidersRoot)
 	mux.HandleFunc("/api/providers/", g.handleProviderByID)

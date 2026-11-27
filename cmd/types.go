@@ -194,25 +194,100 @@ type ClientKey struct {
 }
 
 type RequestLog struct {
-	ID             int64  `json:"id"`
-	Timestamp      int64  `json:"ts"`
-	Provider       string `json:"provider"`
-	ProviderName   string `json:"provider_name,omitempty"`
-	KeyIndex       int    `json:"key_index"`
-	KeyMasked      string `json:"key_masked"`
-	ClientName     string `json:"client_name,omitempty"`
-	Scope          string `json:"scope,omitempty"`
-	RequestedModel string `json:"requested_model"`
-	UpstreamModel  string `json:"upstream_model"`
-	Status         int    `json:"status"`
-	RouteUs        int64  `json:"route_us"`
-	LatencyMs      int64  `json:"latency_ms"`
-	Tokens         int    `json:"tokens"`
-	Stream         bool   `json:"stream"`
-	Fallback       bool   `json:"fallback"`
-	Attempts       int    `json:"attempts"`
-	ErrorCode      string `json:"error_code,omitempty"`
-	Error          string `json:"error,omitempty"`
+	ID              int64  `json:"id"`
+	Timestamp       int64  `json:"ts"`
+	Provider        string `json:"provider"`
+	ProviderName    string `json:"provider_name,omitempty"`
+	KeyIndex        int    `json:"key_index"`
+	KeyMasked       string `json:"key_masked"`
+	ClientName      string `json:"client_name,omitempty"`
+	Scope           string `json:"scope,omitempty"`
+	RequestedModel  string `json:"requested_model"`
+	UpstreamModel   string `json:"upstream_model"`
+	Status          int    `json:"status"`
+	RouteUs         int64  `json:"route_us"`
+	LatencyMs       int64  `json:"latency_ms"`
+	Tokens          int    `json:"tokens"`
+	InputTokens     int64  `json:"input_tokens,omitempty"`
+	OutputTokens    int64  `json:"output_tokens,omitempty"`
+	CacheTokens     int64  `json:"cache_tokens,omitempty"`
+	ReasoningTokens int64  `json:"reasoning_tokens,omitempty"`
+	Stream          bool   `json:"stream"`
+	Fallback        bool   `json:"fallback"`
+	Attempts        int    `json:"attempts"`
+	ErrorCode       string `json:"error_code,omitempty"`
+	Error           string `json:"error,omitempty"`
+}
+
+type TokenUsage struct {
+	InputTokens      int64 `json:"input_tokens"`
+	OutputTokens     int64 `json:"output_tokens"`
+	CacheReadTokens  int64 `json:"cache_read_tokens"`
+	CacheWriteTokens int64 `json:"cache_write_tokens"`
+	ReasoningTokens  int64 `json:"reasoning_tokens"`
+	TotalTokens      int64 `json:"total_tokens"`
+}
+
+type UsageDailyRow struct {
+	Day              string `json:"day"`
+	Provider         string `json:"provider"`
+	Model            string `json:"model"`
+	Requests         int64  `json:"requests"`
+	InputTokens      int64  `json:"input_tokens"`
+	OutputTokens     int64  `json:"output_tokens"`
+	CacheReadTokens  int64  `json:"cache_read_tokens"`
+	CacheWriteTokens int64  `json:"cache_write_tokens"`
+	ReasoningTokens  int64  `json:"reasoning_tokens"`
+	TotalTokens      int64  `json:"total_tokens"`
+}
+
+type UsageRecord struct {
+	Day      string
+	Provider string
+	Model    string
+	Usage    TokenUsage
+}
+
+type UsageTotals struct {
+	Requests         int64 `json:"requests"`
+	InputTokens      int64 `json:"input_tokens"`
+	OutputTokens     int64 `json:"output_tokens"`
+	CacheReadTokens  int64 `json:"cache_read_tokens"`
+	CacheWriteTokens int64 `json:"cache_write_tokens"`
+	ReasoningTokens  int64 `json:"reasoning_tokens"`
+	TotalTokens      int64 `json:"total_tokens"`
+}
+
+type UsageModelSummary struct {
+	Provider         string `json:"provider"`
+	Model            string `json:"model"`
+	Requests         int64  `json:"requests"`
+	InputTokens      int64  `json:"input_tokens"`
+	OutputTokens     int64  `json:"output_tokens"`
+	CacheReadTokens  int64  `json:"cache_read_tokens"`
+	CacheWriteTokens int64  `json:"cache_write_tokens"`
+	ReasoningTokens  int64  `json:"reasoning_tokens"`
+	TotalTokens      int64  `json:"total_tokens"`
+}
+
+type UsageDaySummary struct {
+	Day              string `json:"day"`
+	Requests         int64  `json:"requests"`
+	InputTokens      int64  `json:"input_tokens"`
+	OutputTokens     int64  `json:"output_tokens"`
+	CacheReadTokens  int64  `json:"cache_read_tokens"`
+	CacheWriteTokens int64  `json:"cache_write_tokens"`
+	ReasoningTokens  int64  `json:"reasoning_tokens"`
+	TotalTokens      int64  `json:"total_tokens"`
+}
+
+type UsageReport struct {
+	Days       int                 `json:"days"`
+	CutoffDay  string              `json:"cutoff_day"`
+	Totals     UsageTotals         `json:"totals"`
+	ByModel    []UsageModelSummary `json:"by_model"`
+	ByProvider []UsageModelSummary `json:"by_provider"`
+	Daily      []UsageDaySummary   `json:"daily"`
 }
 
 type LegacyRouterFile struct {
@@ -260,6 +335,7 @@ type writeEvent struct {
 	providerKeyID string
 	clientKeyID   string
 	logEntry      *RequestLog
+	usageRecord   *UsageRecord
 }
 
 type KeyPool struct {
@@ -284,6 +360,7 @@ type KeyPool struct {
 	modelCursor   map[string]int
 	modelCooldown map[string]int64
 	modelLastUsed map[string]int64
+	usageDaily    map[string]*UsageDailyRow
 	logs          [maxLogEntries]RequestLog
 	logHead       int
 	logCount      int
@@ -346,9 +423,20 @@ type OpenAIChoice struct {
 }
 
 type OpenAIUsage struct {
-	PromptTokens     int `json:"prompt_tokens"`
-	CompletionTokens int `json:"completion_tokens"`
-	TotalTokens      int `json:"total_tokens"`
+	PromptTokens             int `json:"prompt_tokens"`
+	CompletionTokens         int `json:"completion_tokens"`
+	TotalTokens              int `json:"total_tokens"`
+	InputTokens              int `json:"input_tokens,omitempty"`
+	OutputTokens             int `json:"output_tokens,omitempty"`
+	CacheReadInputTokens     int `json:"cache_read_input_tokens,omitempty"`
+	CacheCreationInputTokens int `json:"cache_creation_input_tokens,omitempty"`
+	CachedTokens             int `json:"cached_tokens,omitempty"`
+	PromptTokensDetails      *struct {
+		CachedTokens int `json:"cached_tokens"`
+	} `json:"prompt_tokens_details,omitempty"`
+	CompletionTokensDetails *struct {
+		ReasoningTokens int `json:"reasoning_tokens"`
+	} `json:"completion_tokens_details,omitempty"`
 }
 
 type GeminiRequest struct {
@@ -398,9 +486,11 @@ type GeminiResponse struct {
 		FinishReason string        `json:"finishReason"`
 	} `json:"candidates"`
 	UsageMetadata struct {
-		PromptTokenCount     int `json:"promptTokenCount"`
-		CandidatesTokenCount int `json:"candidatesTokenCount"`
-		TotalTokenCount      int `json:"totalTokenCount"`
+		PromptTokenCount        int `json:"promptTokenCount"`
+		CandidatesTokenCount    int `json:"candidatesTokenCount"`
+		CachedContentTokenCount int `json:"cachedContentTokenCount"`
+		ThoughtsTokenCount      int `json:"thoughtsTokenCount"`
+		TotalTokenCount         int `json:"totalTokenCount"`
 	} `json:"usageMetadata"`
 	Error *struct {
 		Code    int    `json:"code"`

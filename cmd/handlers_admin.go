@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -211,6 +212,7 @@ func (g *Gateway) handleStatus(w http.ResponseWriter, r *http.Request) {
 		},
 		"backup":      g.pool.BackupSnapshotConfig(),
 		"apk":         g.apkMeta(),
+		"usage":       g.pool.UsageReport(60),
 		"providers":   g.pool.ProviderViews(),
 		"keys":        g.pool.KeyViews(),
 		"client_keys": g.pool.ClientKeyViews(),
@@ -647,5 +649,32 @@ func (g *Gateway) handleProviderProbeModels(w http.ResponseWriter, r *http.Reque
 		"working_count":  len(working),
 		"duration_ms":    time.Since(start).Milliseconds(),
 		"results":        results,
+	})
+}
+
+func (g *Gateway) handleUsage(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed", "invalid_request_error")
+		return
+	}
+	if !g.adminAuthorized(r) {
+		writeJSONError(w, http.StatusUnauthorized, "unauthorized", "auth_error")
+		return
+	}
+	days := 60
+	if raw := strings.TrimSpace(r.URL.Query().Get("days")); raw != "" {
+		if n, err := strconv.Atoi(raw); err == nil {
+			days = n
+		}
+	}
+	report := g.pool.UsageReport(days)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok":         true,
+		"days":       report.Days,
+		"cutoff_day": report.CutoffDay,
+		"totals":     report.Totals,
+		"by_model":   report.ByModel,
+		"by_provider": report.ByProvider,
+		"daily":      report.Daily,
 	})
 }

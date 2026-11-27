@@ -9,6 +9,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -118,6 +119,20 @@ CREATE TABLE IF NOT EXISTS request_logs (
 	error_code TEXT NOT NULL DEFAULT '',
 	error TEXT NOT NULL DEFAULT ''
 );
+CREATE TABLE IF NOT EXISTS token_usage_daily (
+	day TEXT NOT NULL,
+	provider TEXT NOT NULL,
+	model TEXT NOT NULL,
+	requests INTEGER NOT NULL DEFAULT 0,
+	input_tokens INTEGER NOT NULL DEFAULT 0,
+	output_tokens INTEGER NOT NULL DEFAULT 0,
+	cache_read_tokens INTEGER NOT NULL DEFAULT 0,
+	cache_write_tokens INTEGER NOT NULL DEFAULT 0,
+	reasoning_tokens INTEGER NOT NULL DEFAULT 0,
+	total_tokens INTEGER NOT NULL DEFAULT 0,
+	PRIMARY KEY (day, provider, model)
+);
+CREATE INDEX IF NOT EXISTS idx_token_usage_daily_day ON token_usage_daily(day);
 `
 	if _, err := db.Exec(schema); err != nil {
 		_ = db.Close()
@@ -125,6 +140,10 @@ CREATE TABLE IF NOT EXISTS request_logs (
 	}
 	_, _ = db.Exec(`ALTER TABLE request_logs ADD COLUMN provider_name TEXT NOT NULL DEFAULT ''`)
 	_, _ = db.Exec(`ALTER TABLE request_logs ADD COLUMN error_code TEXT NOT NULL DEFAULT ''`)
+	_, _ = db.Exec(`ALTER TABLE request_logs ADD COLUMN input_tokens INTEGER NOT NULL DEFAULT 0`)
+	_, _ = db.Exec(`ALTER TABLE request_logs ADD COLUMN output_tokens INTEGER NOT NULL DEFAULT 0`)
+	_, _ = db.Exec(`ALTER TABLE request_logs ADD COLUMN cache_tokens INTEGER NOT NULL DEFAULT 0`)
+	_, _ = db.Exec(`ALTER TABLE request_logs ADD COLUMN reasoning_tokens INTEGER NOT NULL DEFAULT 0`)
 	_, _ = db.Exec(`ALTER TABLE providers ADD COLUMN category TEXT NOT NULL DEFAULT 'gratis'`)
 	_, _ = db.Exec(`ALTER TABLE providers ADD COLUMN model_rotation_enabled INTEGER NOT NULL DEFAULT 0`)
 	_, _ = db.Exec(`ALTER TABLE providers ADD COLUMN rotation_models TEXT NOT NULL DEFAULT '[]'`)
@@ -169,7 +188,8 @@ func NewPool(cfg Config) (*KeyPool, error) {
 		modelCursor:   make(map[string]int),
 		modelCooldown: make(map[string]int64),
 		modelLastUsed: make(map[string]int64),
-		writeCh:      make(chan writeEvent, writeBatchBufferSize),
+		usageDaily:    make(map[string]*UsageDailyRow),
+		writeCh:       make(chan writeEvent, writeBatchBufferSize),
 	}
 
 	if err := p.initAuthAndSettings(); err != nil {
@@ -500,14 +520,14 @@ func (p *KeyPool) loadAllFromDB() error {
 	p.logHead = 0
 	p.logCount = 0
 	p.nextLogID = 0
-	lRows, err := p.db.Query(`SELECT id,ts,provider,provider_name,key_index,key_masked,client_name,scope,requested_model,upstream_model,status,route_us,latency_ms,tokens,stream,fallback,attempts,error_code,error FROM request_logs ORDER BY id DESC LIMIT ?`, maxLogEntries)
+	lRows, err := p.db.Query(`SELECT id,ts,provider,provider_name,key_index,key_masked,client_name,scope,requested_model,upstream_model,status,route_us,latency_ms,tokens,input_tokens,output_tokens,cache_tokens,reasoning_tokens,stream,fallback,attempts,error_code,error FROM request_logs ORDER BY id DESC LIMIT ?`, maxLogEntries)
 	if err == nil {
 		defer lRows.Close()
 		var loaded []RequestLog
 		for lRows.Next() {
 			var lg RequestLog
 			var st, fb int
-			if err := lRows.Scan(&lg.ID, &lg.Timestamp, &lg.Provider, &lg.ProviderName, &lg.KeyIndex, &lg.KeyMasked, &lg.ClientName, &lg.Scope, &lg.RequestedModel, &lg.UpstreamModel, &lg.Status, &lg.RouteUs, &lg.LatencyMs, &lg.Tokens, &st, &fb, &lg.Attempts, &lg.ErrorCode, &lg.Error); err == nil {
+			if err := lRows.Scan(&lg.ID, &lg.Timestamp, &lg.Provider, &lg.ProviderName, &lg.KeyIndex, &lg.KeyMasked, &lg.ClientName, &lg.Scope, &lg.RequestedModel, &lg.UpstreamModel, &lg.Status, &lg.RouteUs, &lg.LatencyMs, &lg.Tokens, &lg.InputTokens, &lg.OutputTokens, &lg.CacheTokens, &lg.ReasoningTokens, &st, &fb, &lg.Attempts, &lg.ErrorCode, &lg.Error); err == nil {
 				lg.Stream = st == 1
 				lg.Fallback = fb == 1
 				loaded = append(loaded, lg)
@@ -521,6 +541,21 @@ func (p *KeyPool) loadAllFromDB() error {
 			}
 			if loaded[i].ID > p.nextLogID {
 				p.nextLogID = loaded[i].ID
+			}
+		}
+	}
+
+	p.usageDaily = make(map[string]*UsageDailyRow)
+	cutoffDay := time.Now().AddDate(0, 0, -365).Format("2006-01-02")
+	uRows, err := p.db.Query(`SELECT day,provider,model,requests,input_tokens,output_tokens,cache_read_tokens,cache_write_tokens,reasoning_tokens,total_tokens FROM token_usage_daily WHERE day >= ? ORDER BY day ASC`, cutoffDay)
+	if err == nil {
+		defer uRows.Close()
+		for uRows.Next() {
+			var row UsageDailyRow
+			if err := uRows.Scan(&row.Day, &row.Provider, &row.Model, &row.Requests, &row.InputTokens, &row.OutputTokens, &row.CacheReadTokens, &row.CacheWriteTokens, &row.ReasoningTokens, &row.TotalTokens); err == nil {
+				key := usageDailyKey(row.Day, row.Provider, row.Model)
+				cp := row
+				p.usageDaily[key] = &cp
 			}
 		}
 	}
@@ -541,6 +576,7 @@ func (p *KeyPool) flushBatch(events []writeEvent) {
 	dirtyKeys := make(map[string]bool)
 	dirtyClients := make(map[string]bool)
 	var newLogs []*RequestLog
+	var newUsage []*UsageRecord
 	for _, ev := range events {
 		if ev.providerKeyID != "" {
 			dirtyKeys[ev.providerKeyID] = true
@@ -550,6 +586,9 @@ func (p *KeyPool) flushBatch(events []writeEvent) {
 		}
 		if ev.logEntry != nil {
 			newLogs = append(newLogs, ev.logEntry)
+		}
+		if ev.usageRecord != nil {
+			newUsage = append(newUsage, ev.usageRecord)
 		}
 	}
 
@@ -604,12 +643,22 @@ func (p *KeyPool) flushBatch(events []writeEvent) {
 			fbInt = 1
 		}
 		_, _ = tx.Exec(
-			`INSERT INTO request_logs(ts,provider,provider_name,key_index,key_masked,client_name,scope,requested_model,upstream_model,status,route_us,latency_ms,tokens,stream,fallback,attempts,error_code,error) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-			lg.Timestamp, lg.Provider, lg.ProviderName, lg.KeyIndex, lg.KeyMasked, lg.ClientName, lg.Scope, lg.RequestedModel, lg.UpstreamModel, lg.Status, lg.RouteUs, lg.LatencyMs, lg.Tokens, stInt, fbInt, lg.Attempts, lg.ErrorCode, lg.Error,
+			`INSERT INTO request_logs(ts,provider,provider_name,key_index,key_masked,client_name,scope,requested_model,upstream_model,status,route_us,latency_ms,tokens,input_tokens,output_tokens,cache_tokens,reasoning_tokens,stream,fallback,attempts,error_code,error) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			lg.Timestamp, lg.Provider, lg.ProviderName, lg.KeyIndex, lg.KeyMasked, lg.ClientName, lg.Scope, lg.RequestedModel, lg.UpstreamModel, lg.Status, lg.RouteUs, lg.LatencyMs, lg.Tokens, lg.InputTokens, lg.OutputTokens, lg.CacheTokens, lg.ReasoningTokens, stInt, fbInt, lg.Attempts, lg.ErrorCode, lg.Error,
 		)
 	}
 	if len(newLogs) > 0 {
 		_, _ = tx.Exec(`DELETE FROM request_logs WHERE id <= (SELECT COALESCE(MAX(id),0) - 250 FROM request_logs)`)
+	}
+	for _, ur := range newUsage {
+		_, _ = tx.Exec(
+			`INSERT INTO token_usage_daily(day,provider,model,requests,input_tokens,output_tokens,cache_read_tokens,cache_write_tokens,reasoning_tokens,total_tokens) VALUES(?,?,?,1,?,?,?,?,?,?) ON CONFLICT(day,provider,model) DO UPDATE SET requests=requests+1, input_tokens=input_tokens+excluded.input_tokens, output_tokens=output_tokens+excluded.output_tokens, cache_read_tokens=cache_read_tokens+excluded.cache_read_tokens, cache_write_tokens=cache_write_tokens+excluded.cache_write_tokens, reasoning_tokens=reasoning_tokens+excluded.reasoning_tokens, total_tokens=total_tokens+excluded.total_tokens`,
+			ur.Day, ur.Provider, ur.Model, ur.Usage.InputTokens, ur.Usage.OutputTokens, ur.Usage.CacheReadTokens, ur.Usage.CacheWriteTokens, ur.Usage.ReasoningTokens, ur.Usage.TotalTokens,
+		)
+	}
+	if len(newUsage) > 0 {
+		pruneDay := time.Now().AddDate(0, 0, -366).Format("2006-01-02")
+		_, _ = tx.Exec(`DELETE FROM token_usage_daily WHERE day < ?`, pruneDay)
 	}
 	_ = tx.Commit()
 }
@@ -671,5 +720,162 @@ func (p *KeyPool) reindexProvidersLocked() {
 	for _, k := range p.keys {
 		k.ProviderIndex = idx[k.Provider]
 		idx[k.Provider]++
+	}
+}
+
+func usageDailyKey(day, provider, model string) string {
+	return day + "\x00" + provider + "\x00" + model
+}
+
+func (p *KeyPool) RecordUsage(provider, model string, u TokenUsage) {
+	if u.TotalTokens == 0 {
+		u.TotalTokens = u.InputTokens + u.OutputTokens + u.CacheReadTokens + u.CacheWriteTokens + u.ReasoningTokens
+	}
+	day := time.Now().Format("2006-01-02")
+	prov := strings.TrimSpace(provider)
+	mod := strings.TrimSpace(model)
+	if prov == "" {
+		prov = "unknown"
+	}
+	if mod == "" {
+		mod = "unknown"
+	}
+	key := usageDailyKey(day, prov, mod)
+	p.mu.Lock()
+	row, ok := p.usageDaily[key]
+	if !ok {
+		row = &UsageDailyRow{Day: day, Provider: prov, Model: mod}
+		p.usageDaily[key] = row
+	}
+	row.Requests++
+	row.InputTokens += u.InputTokens
+	row.OutputTokens += u.OutputTokens
+	row.CacheReadTokens += u.CacheReadTokens
+	row.CacheWriteTokens += u.CacheWriteTokens
+	row.ReasoningTokens += u.ReasoningTokens
+	row.TotalTokens += u.TotalTokens
+	cutoff := time.Now().AddDate(0, 0, -366).Format("2006-01-02")
+	for k, r := range p.usageDaily {
+		if r.Day < cutoff {
+			delete(p.usageDaily, k)
+		}
+	}
+	p.mu.Unlock()
+	p.enqueueWrite(writeEvent{
+		usageRecord: &UsageRecord{
+			Day:      day,
+			Provider: prov,
+			Model:    mod,
+			Usage:    u,
+		},
+	})
+}
+
+func (p *KeyPool) UsageReport(days int) UsageReport {
+	if days <= 0 {
+		days = 60
+	}
+	if days > 365 {
+		days = 365
+	}
+	cutoff := time.Now().AddDate(0, 0, -(days - 1)).Format("2006-01-02")
+
+	var totals UsageTotals
+	byModelMap := make(map[string]*UsageModelSummary)
+	byProvMap := make(map[string]*UsageModelSummary)
+	byDayMap := make(map[string]*UsageDaySummary)
+
+	p.mu.RLock()
+	for _, r := range p.usageDaily {
+		if r.Day < cutoff {
+			continue
+		}
+		totals.Requests += r.Requests
+		totals.InputTokens += r.InputTokens
+		totals.OutputTokens += r.OutputTokens
+		totals.CacheReadTokens += r.CacheReadTokens
+		totals.CacheWriteTokens += r.CacheWriteTokens
+		totals.ReasoningTokens += r.ReasoningTokens
+		totals.TotalTokens += r.TotalTokens
+
+		mk := r.Provider + "\x00" + r.Model
+		ms, ok := byModelMap[mk]
+		if !ok {
+			ms = &UsageModelSummary{Provider: r.Provider, Model: r.Model}
+			byModelMap[mk] = ms
+		}
+		ms.Requests += r.Requests
+		ms.InputTokens += r.InputTokens
+		ms.OutputTokens += r.OutputTokens
+		ms.CacheReadTokens += r.CacheReadTokens
+		ms.CacheWriteTokens += r.CacheWriteTokens
+		ms.ReasoningTokens += r.ReasoningTokens
+		ms.TotalTokens += r.TotalTokens
+
+		ps, ok := byProvMap[r.Provider]
+		if !ok {
+			ps = &UsageModelSummary{Provider: r.Provider}
+			byProvMap[r.Provider] = ps
+		}
+		ps.Requests += r.Requests
+		ps.InputTokens += r.InputTokens
+		ps.OutputTokens += r.OutputTokens
+		ps.CacheReadTokens += r.CacheReadTokens
+		ps.CacheWriteTokens += r.CacheWriteTokens
+		ps.ReasoningTokens += r.ReasoningTokens
+		ps.TotalTokens += r.TotalTokens
+
+		ds, ok := byDayMap[r.Day]
+		if !ok {
+			ds = &UsageDaySummary{Day: r.Day}
+			byDayMap[r.Day] = ds
+		}
+		ds.Requests += r.Requests
+		ds.InputTokens += r.InputTokens
+		ds.OutputTokens += r.OutputTokens
+		ds.CacheReadTokens += r.CacheReadTokens
+		ds.CacheWriteTokens += r.CacheWriteTokens
+		ds.ReasoningTokens += r.ReasoningTokens
+		ds.TotalTokens += r.TotalTokens
+	}
+	p.mu.RUnlock()
+
+	byModel := make([]UsageModelSummary, 0, len(byModelMap))
+	for _, m := range byModelMap {
+		byModel = append(byModel, *m)
+	}
+	sort.Slice(byModel, func(i, j int) bool {
+		if byModel[i].TotalTokens == byModel[j].TotalTokens {
+			return byModel[i].Model < byModel[j].Model
+		}
+		return byModel[i].TotalTokens > byModel[j].TotalTokens
+	})
+
+	byProv := make([]UsageModelSummary, 0, len(byProvMap))
+	for _, pv := range byProvMap {
+		byProv = append(byProv, *pv)
+	}
+	sort.Slice(byProv, func(i, j int) bool {
+		if byProv[i].TotalTokens == byProv[j].TotalTokens {
+			return byProv[i].Provider < byProv[j].Provider
+		}
+		return byProv[i].TotalTokens > byProv[j].TotalTokens
+	})
+
+	daily := make([]UsageDaySummary, 0, len(byDayMap))
+	for _, d := range byDayMap {
+		daily = append(daily, *d)
+	}
+	sort.Slice(daily, func(i, j int) bool {
+		return daily[i].Day > daily[j].Day
+	})
+
+	return UsageReport{
+		Days:       days,
+		CutoffDay:  cutoff,
+		Totals:     totals,
+		ByModel:    byModel,
+		ByProvider: byProv,
+		Daily:      daily,
 	}
 }

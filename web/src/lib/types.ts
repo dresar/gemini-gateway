@@ -133,6 +133,35 @@ export interface RequestLog {
   error?: string;
 }
 
+export interface UsageTotals {
+  requests: number;
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_tokens: number;
+  cache_write_tokens: number;
+  reasoning_tokens: number;
+  total_tokens: number;
+}
+
+export interface UsageModelSummary extends UsageTotals {
+  provider: string;
+  model: string;
+}
+
+export interface UsageDaySummary extends UsageTotals {
+  day: string;
+}
+
+export interface UsageReport {
+  ok?: boolean;
+  days: number;
+  cutoff_day: string;
+  totals: UsageTotals;
+  by_model: UsageModelSummary[];
+  by_provider: UsageModelSummary[];
+  daily: UsageDaySummary[];
+}
+
 export interface StatusResponse {
   name?: string;
   version: string;
@@ -164,6 +193,7 @@ export interface StatusResponse {
     filename: string;
     size_bytes: number;
   };
+  usage?: UsageReport;
   providers: ProviderView[];
   keys: KeyView[];
   client_keys: ClientKeyView[];

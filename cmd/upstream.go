@@ -130,17 +130,74 @@ func (g *Gateway) callGeminiOnce(ctx context.Context, prov *Provider, keyRaw, mo
 			PromptTokens:     out.UsageMetadata.PromptTokenCount,
 			CompletionTokens: out.UsageMetadata.CandidatesTokenCount,
 			TotalTokens:      out.UsageMetadata.TotalTokenCount,
+			CachedTokens:     out.UsageMetadata.CachedContentTokenCount,
+			PromptTokensDetails: &struct {
+				CachedTokens int `json:"cached_tokens"`
+			}{CachedTokens: out.UsageMetadata.CachedContentTokenCount},
+			CompletionTokensDetails: &struct {
+				ReasoningTokens int `json:"reasoning_tokens"`
+			}{ReasoningTokens: out.UsageMetadata.ThoughtsTokenCount},
 		},
 	}, nil
 }
 
-func (g *Gateway) streamGeminiOnce(ctx context.Context, w http.ResponseWriter, prov *Provider, keyRaw, model string, gemReq GeminiRequest, trace routeTrace) (int, error) {
+func normalizeOpenAIUsage(u OpenAIUsage) TokenUsage {
+	inTok := int64(u.PromptTokens)
+	if inTok == 0 && u.InputTokens > 0 {
+		inTok = int64(u.InputTokens)
+	}
+	outTok := int64(u.CompletionTokens)
+	if outTok == 0 && u.OutputTokens > 0 {
+		outTok = int64(u.OutputTokens)
+	}
+	var cacheRead int64
+	if u.PromptTokensDetails != nil && u.PromptTokensDetails.CachedTokens > 0 {
+		cacheRead = int64(u.PromptTokensDetails.CachedTokens)
+	} else if u.CacheReadInputTokens > 0 {
+		cacheRead = int64(u.CacheReadInputTokens)
+	} else if u.CachedTokens > 0 {
+		cacheRead = int64(u.CachedTokens)
+	}
+	cacheWrite := int64(u.CacheCreationInputTokens)
+	var reasoning int64
+	if u.CompletionTokensDetails != nil && u.CompletionTokensDetails.ReasoningTokens > 0 {
+		reasoning = int64(u.CompletionTokensDetails.ReasoningTokens)
+	}
+	tot := int64(u.TotalTokens)
+	if tot == 0 {
+		tot = inTok + outTok + cacheRead + cacheWrite
+	}
+	return TokenUsage{
+		InputTokens:      inTok,
+		OutputTokens:     outTok,
+		CacheReadTokens:  cacheRead,
+		CacheWriteTokens: cacheWrite,
+		ReasoningTokens:  reasoning,
+		TotalTokens:      tot,
+	}
+}
+
+func normalizeGeminiUsage(prompt, cand, cached, thoughts, total int) TokenUsage {
+	tot := int64(total)
+	if tot == 0 {
+		tot = int64(prompt) + int64(cand) + int64(thoughts)
+	}
+	return TokenUsage{
+		InputTokens:     int64(prompt),
+		OutputTokens:    int64(cand),
+		CacheReadTokens: int64(cached),
+		ReasoningTokens: int64(thoughts),
+		TotalTokens:     tot,
+	}
+}
+
+func (g *Gateway) streamGeminiOnce(ctx context.Context, w http.ResponseWriter, prov *Provider, keyRaw, model string, gemReq GeminiRequest, trace routeTrace) (TokenUsage, error) {
 	body, _ := json.Marshal(gemReq)
 	base := strings.TrimRight(prov.BaseURL, "/")
 	endpoint := fmt.Sprintf("%s/models/%s:streamGenerateContent?alt=sse", base, model)
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
-		return 0, &upstreamError{Status: 0, Message: err.Error()}
+		return TokenUsage{}, &upstreamError{Status: 0, Message: err.Error()}
 	}
 	finalURL := applyUpstreamAuth(httpReq, endpoint, prov.AuthMode, keyRaw)
 	if finalURL != endpoint {
@@ -151,12 +208,12 @@ func (g *Gateway) streamGeminiOnce(ctx context.Context, w http.ResponseWriter, p
 	httpReq.Header.Set("Content-Type", "application/json")
 	resp, err := g.streamClient.Do(httpReq)
 	if err != nil {
-		return 0, &upstreamError{Status: 0, Message: sanitizeError(err.Error(), keyRaw)}
+		return TokenUsage{}, &upstreamError{Status: 0, Message: sanitizeError(err.Error(), keyRaw)}
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 8192))
-		return 0, &upstreamError{
+		return TokenUsage{}, &upstreamError{
 			Status:     resp.StatusCode,
 			Message:    sanitizeError(fmt.Sprintf("status %d: %s", resp.StatusCode, string(raw)), keyRaw),
 			RetryAfter: parseRetryAfter(resp.Header),
@@ -170,7 +227,7 @@ func (g *Gateway) streamGeminiOnce(ctx context.Context, w http.ResponseWriter, p
 
 	scanner := bufio.NewScanner(resp.Body)
 	scanner.Buffer(make([]byte, 64*1024), 4<<20)
-	totalTokens := 0
+	var usage TokenUsage
 	sentRole := false
 	finishReason := "stop"
 
@@ -187,8 +244,12 @@ func (g *Gateway) streamGeminiOnce(ctx context.Context, w http.ResponseWriter, p
 		if json.Unmarshal([]byte(payload), &chunk) != nil {
 			continue
 		}
-		if chunk.UsageMetadata.TotalTokenCount > totalTokens {
-			totalTokens = chunk.UsageMetadata.TotalTokenCount
+		um := chunk.UsageMetadata
+		if um.TotalTokenCount > 0 || um.PromptTokenCount > 0 || um.CandidatesTokenCount > 0 || um.CachedContentTokenCount > 0 || um.ThoughtsTokenCount > 0 {
+			nextUsage := normalizeGeminiUsage(um.PromptTokenCount, um.CandidatesTokenCount, um.CachedContentTokenCount, um.ThoughtsTokenCount, um.TotalTokenCount)
+			if nextUsage.TotalTokens >= usage.TotalTokens {
+				usage = nextUsage
+			}
 		}
 		if len(chunk.Candidates) == 0 {
 			continue
@@ -258,7 +319,7 @@ func (g *Gateway) streamGeminiOnce(ctx context.Context, w http.ResponseWriter, p
 	if flusher != nil {
 		flusher.Flush()
 	}
-	return totalTokens, nil
+	return usage, nil
 }
 
 func buildOpenAIPayload(req *OpenAIRequest, model string, s RouterSettings, stream bool) []byte {
@@ -342,12 +403,12 @@ func (g *Gateway) callOpenAIOnce(ctx context.Context, prov *Provider, keyRaw, mo
 	return &out, nil
 }
 
-func (g *Gateway) streamOpenAIOnce(ctx context.Context, w http.ResponseWriter, prov *Provider, keyRaw, model string, req *OpenAIRequest, s RouterSettings, trace routeTrace) (int, error) {
+func (g *Gateway) streamOpenAIOnce(ctx context.Context, w http.ResponseWriter, prov *Provider, keyRaw, model string, req *OpenAIRequest, s RouterSettings, trace routeTrace) (TokenUsage, error) {
 	body := buildOpenAIPayload(req, model, s, true)
 	endpoint := openAIChatEndpoint(prov.BaseURL)
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
-		return 0, &upstreamError{Status: 0, Message: err.Error()}
+		return TokenUsage{}, &upstreamError{Status: 0, Message: err.Error()}
 	}
 	finalURL := applyUpstreamAuth(httpReq, endpoint, prov.AuthMode, keyRaw)
 	if finalURL != endpoint {
@@ -359,12 +420,12 @@ func (g *Gateway) streamOpenAIOnce(ctx context.Context, w http.ResponseWriter, p
 	httpReq.Header.Set("Accept", "text/event-stream")
 	resp, err := g.streamClient.Do(httpReq)
 	if err != nil {
-		return 0, &upstreamError{Status: 0, Message: sanitizeError(err.Error(), keyRaw)}
+		return TokenUsage{}, &upstreamError{Status: 0, Message: sanitizeError(err.Error(), keyRaw)}
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 8192))
-		return 0, &upstreamError{
+		return TokenUsage{}, &upstreamError{
 			Status:     resp.StatusCode,
 			Message:    sanitizeError(fmt.Sprintf("status %d: %s", resp.StatusCode, string(raw)), keyRaw),
 			RetryAfter: parseRetryAfter(resp.Header),
@@ -374,19 +435,22 @@ func (g *Gateway) streamOpenAIOnce(ctx context.Context, w http.ResponseWriter, p
 	writeSSEHeaders(w, trace)
 	flusher, _ := w.(http.Flusher)
 	reader := bufio.NewReaderSize(resp.Body, 32*1024)
-	totalTokens := 0
+	var usage TokenUsage
 	for {
 		line, err := reader.ReadString('\n')
 		if len(line) > 0 {
 			_, _ = w.Write([]byte(line))
 			if strings.HasPrefix(line, "data:") {
 				trimmed := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
-				if trimmed != "" && trimmed != "[DONE]" && strings.Contains(trimmed, `"total_tokens"`) {
+				if trimmed != "" && trimmed != "[DONE]" && strings.Contains(trimmed, `"usage"`) {
 					var meta struct {
 						Usage OpenAIUsage `json:"usage"`
 					}
-					if json.Unmarshal([]byte(trimmed), &meta) == nil && meta.Usage.TotalTokens > 0 {
-						totalTokens = meta.Usage.TotalTokens
+					if json.Unmarshal([]byte(trimmed), &meta) == nil {
+						nextUsage := normalizeOpenAIUsage(meta.Usage)
+						if nextUsage.TotalTokens > 0 || nextUsage.InputTokens > 0 || nextUsage.OutputTokens > 0 {
+							usage = nextUsage
+						}
 					}
 				}
 				if flusher != nil {
@@ -401,7 +465,7 @@ func (g *Gateway) streamOpenAIOnce(ctx context.Context, w http.ResponseWriter, p
 	if flusher != nil {
 		flusher.Flush()
 	}
-	return totalTokens, nil
+	return usage, nil
 }
 
 func writeSSEHeaders(w http.ResponseWriter, trace routeTrace) {
@@ -553,14 +617,14 @@ func (g *Gateway) executeRoutedChat(ctx context.Context, w http.ResponseWriter, 
 			allowGeminiModelFallback := !rotateModels && prov.APIType == apiTypeGemini &&
 				(targetModel == prov.DefaultModel || isAutoModelAlias(trimmedReqModel))
 			if req.Stream && w != nil {
-				var tokens int
+				var usage TokenUsage
 				var err error
 				if prov.APIType == apiTypeGemini {
-					tokens, err = g.streamGeminiOnce(reqCtx, w, prov, key.Key, targetModel, gemReq, trace)
+					usage, err = g.streamGeminiOnce(reqCtx, w, prov, key.Key, targetModel, gemReq, trace)
 					if err != nil && allowGeminiModelFallback && isModelUnavailable404(err) {
 						for _, fbModel := range geminiFallbackModels(targetModel) {
 							trace.Model = fbModel
-							tokens, err = g.streamGeminiOnce(reqCtx, w, prov, key.Key, fbModel, gemReq, trace)
+							usage, err = g.streamGeminiOnce(reqCtx, w, prov, key.Key, fbModel, gemReq, trace)
 							if err == nil {
 								targetModel = fbModel
 								break
@@ -571,8 +635,9 @@ func (g *Gateway) executeRoutedChat(ctx context.Context, w http.ResponseWriter, 
 						}
 					}
 				} else {
-					tokens, err = g.streamOpenAIOnce(reqCtx, w, prov, key.Key, targetModel, req, s, trace)
+					usage, err = g.streamOpenAIOnce(reqCtx, w, prov, key.Key, targetModel, req, s, trace)
 				}
+				tokens := int(usage.TotalTokens)
 				lat := time.Since(callStart).Milliseconds()
 				trace.LatencyMs = lat
 				trace.Tokens = tokens
@@ -582,24 +647,29 @@ func (g *Gateway) executeRoutedChat(ctx context.Context, w http.ResponseWriter, 
 						g.pool.MarkModelOK(prov.ID, targetModel)
 					}
 					g.pool.RecordClientUsage(client.ID, tokens)
+					g.pool.RecordUsage(prov.ID, targetModel, usage)
 					g.reqOK.Add(1)
 					g.tokTotal.Add(int64(tokens))
 					g.pool.RecordLog(RequestLog{
-						Provider:       prov.ID,
-						ProviderName:   prov.Name,
-						KeyIndex:       key.ProviderIndex,
-						KeyMasked:      key.Masked,
-						ClientName:     client.Name,
-						Scope:          scope,
-						RequestedModel: req.Model,
-						UpstreamModel:  targetModel,
-						Status:         200,
-						RouteUs:        routeUs,
-						LatencyMs:      lat,
-						Tokens:         tokens,
-						Stream:         true,
-						Fallback:       pIdx > 0,
-						Attempts:       attempts,
+						Provider:        prov.ID,
+						ProviderName:    prov.Name,
+						KeyIndex:        key.ProviderIndex,
+						KeyMasked:       key.Masked,
+						ClientName:      client.Name,
+						Scope:           scope,
+						RequestedModel:  req.Model,
+						UpstreamModel:   targetModel,
+						Status:          200,
+						RouteUs:         routeUs,
+						LatencyMs:       lat,
+						Tokens:          tokens,
+						InputTokens:     usage.InputTokens,
+						OutputTokens:    usage.OutputTokens,
+						CacheTokens:     usage.CacheReadTokens + usage.CacheWriteTokens,
+						ReasoningTokens: usage.ReasoningTokens,
+						Stream:          true,
+						Fallback:        pIdx > 0,
+						Attempts:        attempts,
 					})
 					return nil, trace, nil
 				}
@@ -635,7 +705,8 @@ func (g *Gateway) executeRoutedChat(ctx context.Context, w http.ResponseWriter, 
 			}
 			lat := time.Since(callStart).Milliseconds()
 			if err == nil && resp != nil {
-				tokens := resp.Usage.TotalTokens
+				usage := normalizeOpenAIUsage(resp.Usage)
+				tokens := int(usage.TotalTokens)
 				trace.LatencyMs = lat
 				trace.Tokens = tokens
 				g.pool.Mark200(key.ID, lat, routeUs, tokens)
@@ -643,24 +714,29 @@ func (g *Gateway) executeRoutedChat(ctx context.Context, w http.ResponseWriter, 
 					g.pool.MarkModelOK(prov.ID, targetModel)
 				}
 				g.pool.RecordClientUsage(client.ID, tokens)
+				g.pool.RecordUsage(prov.ID, targetModel, usage)
 				g.reqOK.Add(1)
 				g.tokTotal.Add(int64(tokens))
 				g.pool.RecordLog(RequestLog{
-					Provider:       prov.ID,
-					ProviderName:   prov.Name,
-					KeyIndex:       key.ProviderIndex,
-					KeyMasked:      key.Masked,
-					ClientName:     client.Name,
-					Scope:          scope,
-					RequestedModel: req.Model,
-					UpstreamModel:  targetModel,
-					Status:         200,
-					RouteUs:        routeUs,
-					LatencyMs:      lat,
-					Tokens:         tokens,
-					Stream:         false,
-					Fallback:       pIdx > 0,
-					Attempts:       attempts,
+					Provider:        prov.ID,
+					ProviderName:    prov.Name,
+					KeyIndex:        key.ProviderIndex,
+					KeyMasked:       key.Masked,
+					ClientName:      client.Name,
+					Scope:           scope,
+					RequestedModel:  req.Model,
+					UpstreamModel:   targetModel,
+					Status:          200,
+					RouteUs:         routeUs,
+					LatencyMs:       lat,
+					Tokens:          tokens,
+					InputTokens:     usage.InputTokens,
+					OutputTokens:    usage.OutputTokens,
+					CacheTokens:     usage.CacheReadTokens + usage.CacheWriteTokens,
+					ReasoningTokens: usage.ReasoningTokens,
+					Stream:          false,
+					Fallback:        pIdx > 0,
+					Attempts:        attempts,
 				})
 				return resp, trace, nil
 			}

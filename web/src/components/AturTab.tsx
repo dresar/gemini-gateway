@@ -34,6 +34,7 @@ import {
   SmartphoneIcon,
   SunIcon,
 } from './Icons';
+import { UsageCostCard } from './UsageCostCard';
 
 export function AturTab({
   statusData,
@@ -283,6 +284,7 @@ export function AturTab({
 
   return (
     <div className="settings-grid">
+      <UsageCostCard initialUsage={statusData?.usage} onSessionExpired={onSessionExpired} />
       <section className="neu-card">
         <div className="card-head">
           <h2 className="card-title">Rotasi</h2>

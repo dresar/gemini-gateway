@@ -15,6 +15,7 @@ import type {
   ProviderView,
   RouterConfig,
   StatusResponse,
+  UsageReport,
 } from './types';
 
 export class ApiError extends Error {
@@ -295,4 +296,8 @@ export function runChatTest(payload: {
     method: 'POST',
     body: JSON.stringify(payload),
   });
+}
+
+export function fetchUsage(days = 60): Promise<UsageReport> {
+  return request(`/api/usage?days=${encodeURIComponent(String(days))}`);
 }

@@ -190,8 +190,12 @@ export default function HomePage() {
       } else if (h === 'provider/new') {
         setEditingProvider(null);
         setPageView('provider-form');
+      } else if (h === 'atur' || h === 'pool' || h === 'akses' || h === 'uji') {
+        setPageView(null);
+        setTab(h as TabId);
       } else if (h === '' || h === 'beranda') {
         setPageView(null);
+        setTab('home');
       }
     };
     syncFromHash();
