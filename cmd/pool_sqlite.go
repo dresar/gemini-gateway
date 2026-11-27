@@ -126,6 +126,8 @@ CREATE TABLE IF NOT EXISTS request_logs (
 	_, _ = db.Exec(`ALTER TABLE request_logs ADD COLUMN provider_name TEXT NOT NULL DEFAULT ''`)
 	_, _ = db.Exec(`ALTER TABLE request_logs ADD COLUMN error_code TEXT NOT NULL DEFAULT ''`)
 	_, _ = db.Exec(`ALTER TABLE providers ADD COLUMN category TEXT NOT NULL DEFAULT 'gratis'`)
+	_, _ = db.Exec(`ALTER TABLE providers ADD COLUMN model_rotation_enabled INTEGER NOT NULL DEFAULT 0`)
+	_, _ = db.Exec(`ALTER TABLE providers ADD COLUMN rotation_models TEXT NOT NULL DEFAULT '[]'`)
 	_, _ = db.Exec(`ALTER TABLE provider_keys ADD COLUMN consec_fails INTEGER NOT NULL DEFAULT 0`)
 	_, _ = db.Exec(`ALTER TABLE provider_keys ADD COLUMN last_error_code TEXT NOT NULL DEFAULT ''`)
 	if dbPath != ":memory:" {
@@ -162,8 +164,11 @@ func NewPool(cfg Config) (*KeyPool, error) {
 		byID:         make(map[string]*KeyEntry),
 		clientByID:   make(map[string]*ClientKey),
 		clientByHash: make(map[string]*ClientKey),
-		swrrCurrent:  make(map[string]int),
-		rrCursor:     make(map[string]int),
+		swrrCurrent:   make(map[string]int),
+		rrCursor:      make(map[string]int),
+		modelCursor:   make(map[string]int),
+		modelCooldown: make(map[string]int64),
+		modelLastUsed: make(map[string]int64),
 		writeCh:      make(chan writeEvent, writeBatchBufferSize),
 	}
 
@@ -343,12 +348,12 @@ func (p *KeyPool) seedDefaultProvidersAndMigrate() error {
 			agnPrio, gemPrio = 1, 2
 		}
 		_, _ = p.db.Exec(
-			`INSERT OR IGNORE INTO providers(id,name,category,api_type,auth_mode,base_url,default_model,icon,enabled,weight,priority,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`,
-			"gemini", "Gemini", "gratis", apiTypeGemini, authModeQueryKey, p.cfg.GeminiBaseURL, gemModel, "gemini", gemEn, gemW, gemPrio, now,
+			`INSERT OR IGNORE INTO providers(id,name,category,api_type,auth_mode,base_url,default_model,icon,enabled,weight,priority,model_rotation_enabled,rotation_models,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			"gemini", "Gemini", "gratis", apiTypeGemini, authModeQueryKey, p.cfg.GeminiBaseURL, gemModel, "gemini", gemEn, gemW, gemPrio, 1, "[]", now,
 		)
 		_, _ = p.db.Exec(
-			`INSERT OR IGNORE INTO providers(id,name,category,api_type,auth_mode,base_url,default_model,icon,enabled,weight,priority,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`,
-			"agnes", "Agnes", "gratis", apiTypeOpenAI, authModeBearer, agnURL, agnModel, "agnes", agnEn, agnW, agnPrio, now+1,
+			`INSERT OR IGNORE INTO providers(id,name,category,api_type,auth_mode,base_url,default_model,icon,enabled,weight,priority,model_rotation_enabled,rotation_models,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			"agnes", "Agnes", "gratis", apiTypeOpenAI, authModeBearer, agnURL, agnModel, "agnes", agnEn, agnW, agnPrio, 1, "[]", now+1,
 		)
 	}
 
@@ -424,7 +429,7 @@ func (p *KeyPool) loadAllFromDB() error {
 
 	p.providers = nil
 	p.providerByID = make(map[string]*Provider)
-	pRows, err := p.db.Query(`SELECT id,name,category,api_type,auth_mode,base_url,default_model,icon,enabled,weight,priority,created_at FROM providers ORDER BY priority ASC, created_at ASC`)
+	pRows, err := p.db.Query(`SELECT id,name,category,api_type,auth_mode,base_url,default_model,icon,enabled,weight,priority,model_rotation_enabled,rotation_models,created_at FROM providers ORDER BY priority ASC, created_at ASC`)
 	if err != nil {
 		return err
 	}
@@ -432,11 +437,15 @@ func (p *KeyPool) loadAllFromDB() error {
 	for pRows.Next() {
 		var pr Provider
 		var en int
-		if err := pRows.Scan(&pr.ID, &pr.Name, &pr.Category, &pr.APIType, &pr.AuthMode, &pr.BaseURL, &pr.DefaultModel, &pr.Icon, &en, &pr.Weight, &pr.Priority, &pr.CreatedAt); err != nil {
+		var rotEn int
+		var rotRaw string
+		if err := pRows.Scan(&pr.ID, &pr.Name, &pr.Category, &pr.APIType, &pr.AuthMode, &pr.BaseURL, &pr.DefaultModel, &pr.Icon, &en, &pr.Weight, &pr.Priority, &rotEn, &rotRaw, &pr.CreatedAt); err != nil {
 			return err
 		}
 		pr.Category = normalizeCategory(pr.Category)
 		pr.Enabled = en == 1
+		pr.ModelRotationEnabled = rotEn == 1
+		pr.RotationModels = decodeRotationModels(rotRaw)
 		p.providers = append(p.providers, &pr)
 		p.providerByID[pr.ID] = &pr
 	}

@@ -28,18 +28,20 @@ type Config struct {
 }
 
 type Provider struct {
-	ID           string `json:"id"`
-	Name         string `json:"name"`
-	Category     string `json:"category"`
-	APIType      string `json:"api_type"`
-	AuthMode     string `json:"auth_mode"`
-	BaseURL      string `json:"base_url"`
-	DefaultModel string `json:"default_model"`
-	Icon         string `json:"icon"`
-	Enabled      bool   `json:"enabled"`
-	Weight       int    `json:"weight"`
-	Priority     int    `json:"priority"`
-	CreatedAt    int64  `json:"created_at"`
+	ID                   string   `json:"id"`
+	Name                 string   `json:"name"`
+	Category             string   `json:"category"`
+	APIType              string   `json:"api_type"`
+	AuthMode             string   `json:"auth_mode"`
+	BaseURL              string   `json:"base_url"`
+	DefaultModel         string   `json:"default_model"`
+	Icon                 string   `json:"icon"`
+	Enabled              bool     `json:"enabled"`
+	Weight               int      `json:"weight"`
+	Priority             int      `json:"priority"`
+	ModelRotationEnabled bool     `json:"model_rotation_enabled"`
+	RotationModels       []string `json:"rotation_models"`
+	CreatedAt            int64    `json:"created_at"`
 }
 
 type ProviderView struct {
@@ -53,6 +55,7 @@ type ProviderView struct {
 type RouterSettings struct {
 	RotationMode          string `json:"rotation_mode"`
 	ModelRoutingPolicy    string `json:"model_routing_policy"`
+	ModelRotationMode     string `json:"model_rotation_mode"`
 	KeySelection          string `json:"key_selection"`
 	CrossFallback         bool   `json:"cross_fallback"`
 	MaxRetriesPerProvider int    `json:"max_retries_per_provider"`
@@ -278,6 +281,9 @@ type KeyPool struct {
 	adminHash     string
 	swrrCurrent   map[string]int
 	rrCursor      map[string]int
+	modelCursor   map[string]int
+	modelCooldown map[string]int64
+	modelLastUsed map[string]int64
 	logs          [maxLogEntries]RequestLog
 	logHead       int
 	logCount      int

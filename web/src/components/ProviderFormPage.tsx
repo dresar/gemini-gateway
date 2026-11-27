@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { testRawKey } from '@/lib/api';
+import { probeProviderModels, testRawKey } from '@/lib/api';
 import type { APIType, AuthMode, KeyTestResult, ProviderInput, ProviderView } from '@/lib/types';
 import { AlertIcon, CheckCircleIcon, EyeIcon } from './Icons';
 import { PROVIDER_ICON_OPTIONS, ProviderGlyph } from './ProviderIcons';
@@ -32,6 +32,10 @@ export function ProviderFormPage({
   const [weight, setWeight] = useState(50);
   const [priority, setPriority] = useState(3);
   const [enabled, setEnabled] = useState(true);
+  const [modelRotationEnabled, setModelRotationEnabled] = useState(false);
+  const [rotationModelsRaw, setRotationModelsRaw] = useState('');
+  const [probingModels, setProbingModels] = useState(false);
+  const [probeMsg, setProbeMsg] = useState('');
   const [initialKeysRaw, setInitialKeysRaw] = useState('');
   const [showTestKey, setShowTestKey] = useState(false);
   const [testing, setTesting] = useState(false);
@@ -52,6 +56,9 @@ export function ProviderFormPage({
       setWeight(editing.weight);
       setPriority(editing.priority);
       setEnabled(editing.enabled);
+      setModelRotationEnabled(Boolean(editing.model_rotation_enabled));
+      setRotationModelsRaw((editing.rotation_models || []).join('\n'));
+      setProbeMsg('');
       setInitialKeysRaw('');
     } else {
       setName('');
@@ -65,6 +72,9 @@ export function ProviderFormPage({
       setWeight(50);
       setPriority(3);
       setEnabled(true);
+      setModelRotationEnabled(false);
+      setRotationModelsRaw('');
+      setProbeMsg('');
       setInitialKeysRaw('');
     }
     setTestResult(null);
@@ -114,6 +124,10 @@ export function ProviderFormPage({
       return;
     }
     setError('');
+    const parsedRotation = rotationModelsRaw
+      .split(/[\n,]+/)
+      .map((s) => s.trim())
+      .filter(Boolean);
     await onSubmit(
       {
         name: name.trim(),
@@ -126,10 +140,31 @@ export function ProviderFormPage({
         enabled,
         weight: Number(weight) || 50,
         priority: Number(priority) || 1,
+        model_rotation_enabled: modelRotationEnabled,
+        rotation_models: parsedRotation,
       },
       initialKeysRaw,
       editing?.id,
     );
+  };
+
+  const handleQuickProbe = async () => {
+    if (!editing?.id) return;
+    setError('');
+    setProbeMsg('');
+    setProbingModels(true);
+    try {
+      const res = await probeProviderModels(editing.id, { apply: false });
+      setRotationModelsRaw((res.working_models || []).join('\n'));
+      if ((res.working_models || []).length > 0) {
+        setModelRotationEnabled(true);
+      }
+      setProbeMsg(`${res.working_count}/${res.tested_count} model aktif (${res.duration_ms}ms)`);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Cek model gagal');
+    } finally {
+      setProbingModels(false);
+    }
   };
 
   return (
@@ -285,7 +320,7 @@ export function ProviderFormPage({
             </div>
 
             <div className="field">
-              <label htmlFor="pv-page-model">Model</label>
+              <label htmlFor="pv-page-model">Model Default</label>
               <input
                 id="pv-page-model"
                 type="text"
@@ -297,6 +332,48 @@ export function ProviderFormPage({
                 autoCapitalize="none"
                 spellCheck={false}
               />
+            </div>
+
+            <label className="switch-row">
+              <span>Aktifkan Rotasi Model</span>
+              <input
+                type="checkbox"
+                checked={modelRotationEnabled}
+                onChange={(e) => setModelRotationEnabled(e.target.checked)}
+              />
+            </label>
+
+            <div className="field">
+              <div className="item-top" style={{ marginBottom: '0.35rem' }}>
+                <label htmlFor="pv-page-rotmodels" style={{ margin: 0 }}>
+                  Daftar Model Rotasi
+                </label>
+                {editing?.id ? (
+                  <button
+                    type="button"
+                    className="neu-btn neu-btn-sm"
+                    disabled={probingModels || busy}
+                    onClick={() => void handleQuickProbe()}
+                  >
+                    {probingModels ? 'Mengecek...' : 'Cek Cepat Model'}
+                  </button>
+                ) : null}
+              </div>
+              <textarea
+                id="pv-page-rotmodels"
+                rows={3}
+                placeholder="1 model per baris atau pisah koma"
+                value={rotationModelsRaw}
+                onChange={(e) => setRotationModelsRaw(e.target.value)}
+                autoCorrect="off"
+                autoCapitalize="none"
+                spellCheck={false}
+              />
+              {probeMsg ? (
+                <p className="kpi-sub" style={{ margin: '0.35rem 0 0' }}>
+                  {probeMsg}
+                </p>
+              ) : null}
             </div>
 
             <div className="field">

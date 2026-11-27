@@ -217,6 +217,7 @@ func defaultSettings() RouterSettings {
 	return RouterSettings{
 		RotationMode:          "weighted",
 		ModelRoutingPolicy:    "auto_or_override",
+		ModelRotationMode:     "round_robin",
 		KeySelection:          "smart",
 		CrossFallback:         true,
 		MaxRetriesPerProvider: 5,
@@ -236,6 +237,11 @@ func normalizeSettings(s *RouterSettings) {
 	case "auto_or_override", "always_rotate":
 	default:
 		s.ModelRoutingPolicy = "auto_or_override"
+	}
+	switch s.ModelRotationMode {
+	case "off", "round_robin", "random", "smart":
+	default:
+		s.ModelRotationMode = "round_robin"
 	}
 	switch s.KeySelection {
 	case "smart", "random", "lru_jitter", "round_robin":
@@ -357,7 +363,26 @@ func normalizeProvider(p *Provider) error {
 	if p.Priority > 999 {
 		p.Priority = 999
 	}
+	p.RotationModels = normalizeRotationModelList(p.RotationModels)
 	return nil
+}
+
+func normalizeRotationModelList(in []string) []string {
+	out := make([]string, 0, len(in))
+	seen := make(map[string]bool, len(in))
+	for _, raw := range in {
+		m := strings.TrimSpace(raw)
+		if m == "" {
+			continue
+		}
+		key := strings.ToLower(m)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		out = append(out, m)
+	}
+	return out
 }
 
 func maskPostgresURL(raw string) string {

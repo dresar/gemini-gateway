@@ -486,7 +486,11 @@ func (g *Gateway) executeRoutedChat(ctx context.Context, w http.ResponseWriter, 
 			g.reqFall.Add(1)
 		}
 
-		targetModel := g.resolveUpstreamModel(prov, req.Model, scope, providers)
+		baseTargetModel := g.resolveUpstreamModel(prov, req.Model, scope, providers)
+		trimmedReqModel := strings.TrimSpace(req.Model)
+		isAutoReq := trimmedReqModel == "" || strings.EqualFold(trimmedReqModel, "auto") || strings.EqualFold(trimmedReqModel, "router") || strings.EqualFold(trimmedReqModel, prov.ID)
+		rotateModels := prov.ModelRotationEnabled && s.ModelRotationMode != "off" && len(prov.RotationModels) > 0 && (isAutoReq || s.ModelRoutingPolicy == "always_rotate")
+		triedModels := make(map[string]bool)
 		var gemReq GeminiRequest
 		if prov.APIType == apiTypeGemini {
 			gemReq = g.buildGeminiReq(req, s)
@@ -500,8 +504,22 @@ func (g *Gateway) executeRoutedChat(ctx context.Context, w http.ResponseWriter, 
 				case <-time.After(backoff(n - 1)):
 				}
 			}
+			targetModel := baseTargetModel
+			if rotateModels {
+				pickedModel := g.pool.SelectProviderModel(prov.ID, triedModels)
+				if pickedModel == "" && len(triedModels) > 0 {
+					triedModels = make(map[string]bool)
+					pickedModel = g.pool.SelectProviderModel(prov.ID, triedModels)
+				}
+				if pickedModel != "" {
+					targetModel = pickedModel
+				}
+			}
 			pickStart := time.Now()
 			key := g.pool.SelectKey(prov.ID, tried)
+			if key == nil && rotateModels && len(triedModels) < len(prov.RotationModels) {
+				key = g.pool.SelectKey(prov.ID, nil)
+			}
 			routeUs := time.Since(pickStart).Microseconds()
 			if n == 0 && pIdx == 0 {
 				routeUs = time.Since(routeStart).Microseconds()
@@ -532,8 +550,8 @@ func (g *Gateway) executeRoutedChat(ctx context.Context, w http.ResponseWriter, 
 			}
 
 			callStart := time.Now()
-			allowGeminiModelFallback := prov.APIType == apiTypeGemini &&
-				(targetModel == prov.DefaultModel || strings.TrimSpace(req.Model) == "" || strings.EqualFold(req.Model, "auto") || strings.EqualFold(req.Model, "router"))
+			allowGeminiModelFallback := !rotateModels && prov.APIType == apiTypeGemini &&
+				(targetModel == prov.DefaultModel || trimmedReqModel == "" || strings.EqualFold(trimmedReqModel, "auto") || strings.EqualFold(trimmedReqModel, "router"))
 			if req.Stream && w != nil {
 				var tokens int
 				var err error
@@ -560,6 +578,9 @@ func (g *Gateway) executeRoutedChat(ctx context.Context, w http.ResponseWriter, 
 				trace.Tokens = tokens
 				if err == nil {
 					g.pool.Mark200(key.ID, lat, routeUs, tokens)
+					if rotateModels {
+						g.pool.MarkModelOK(prov.ID, targetModel)
+					}
 					g.pool.RecordClientUsage(client.ID, tokens)
 					g.reqOK.Add(1)
 					g.tokTotal.Add(int64(tokens))
@@ -583,26 +604,8 @@ func (g *Gateway) executeRoutedChat(ctx context.Context, w http.ResponseWriter, 
 					return nil, trace, nil
 				}
 				lastErr = err
-				abortBad, errSt, errCode, cleanMsg := g.handleUpstreamFailure(key, err)
+				abortBad := g.recordAttemptFailure(prov, s, key, targetModel, req.Model, client, scope, rotateModels, tried, triedModels, routeUs, lat, true, pIdx > 0, attempts, err)
 				loggedFailure = true
-				g.pool.RecordLog(RequestLog{
-					Provider:       prov.ID,
-					ProviderName:   prov.Name,
-					KeyIndex:       key.ProviderIndex,
-					KeyMasked:      key.Masked,
-					ClientName:     client.Name,
-					Scope:          scope,
-					RequestedModel: req.Model,
-					UpstreamModel:  targetModel,
-					Status:         errSt,
-					RouteUs:        routeUs,
-					LatencyMs:      lat,
-					Stream:         true,
-					Fallback:       pIdx > 0,
-					Attempts:       attempts,
-					ErrorCode:      errCode,
-					Error:          cleanMsg,
-				})
 				if abortBad {
 					g.reqErr.Add(1)
 					return nil, trace, err
@@ -636,6 +639,9 @@ func (g *Gateway) executeRoutedChat(ctx context.Context, w http.ResponseWriter, 
 				trace.LatencyMs = lat
 				trace.Tokens = tokens
 				g.pool.Mark200(key.ID, lat, routeUs, tokens)
+				if rotateModels {
+					g.pool.MarkModelOK(prov.ID, targetModel)
+				}
 				g.pool.RecordClientUsage(client.ID, tokens)
 				g.reqOK.Add(1)
 				g.tokTotal.Add(int64(tokens))
@@ -659,26 +665,8 @@ func (g *Gateway) executeRoutedChat(ctx context.Context, w http.ResponseWriter, 
 				return resp, trace, nil
 			}
 			lastErr = err
-			abortBad, errSt, errCode, cleanMsg := g.handleUpstreamFailure(key, err)
+			abortBad := g.recordAttemptFailure(prov, s, key, targetModel, req.Model, client, scope, rotateModels, tried, triedModels, routeUs, lat, false, pIdx > 0, attempts, err)
 			loggedFailure = true
-			g.pool.RecordLog(RequestLog{
-				Provider:       prov.ID,
-				ProviderName:   prov.Name,
-				KeyIndex:       key.ProviderIndex,
-				KeyMasked:      key.Masked,
-				ClientName:     client.Name,
-				Scope:          scope,
-				RequestedModel: req.Model,
-				UpstreamModel:  targetModel,
-				Status:         errSt,
-				RouteUs:        routeUs,
-				LatencyMs:      lat,
-				Stream:         false,
-				Fallback:       pIdx > 0,
-				Attempts:       attempts,
-				ErrorCode:      errCode,
-				Error:          cleanMsg,
-			})
 			if abortBad {
 				g.reqErr.Add(1)
 				return nil, trace, err
@@ -708,4 +696,84 @@ func (g *Gateway) executeRoutedChat(ctx context.Context, w http.ResponseWriter, 
 		})
 	}
 	return nil, routeTrace{Attempts: attempts, Scope: scope}, lastErr
+}
+
+func (g *Gateway) recordAttemptFailure(
+	prov *Provider,
+	s RouterSettings,
+	key *KeyEntry,
+	targetModel, requestedModel string,
+	client ClientKey,
+	scope string,
+	rotateModels bool,
+	triedKeys, triedModels map[string]bool,
+	routeUs, lat int64,
+	stream, fallback bool,
+	attempts int,
+	err error,
+) bool {
+	status := 502
+	msg := err.Error()
+	var ue *upstreamError
+	if errors.As(err, &ue) {
+		if ue.Status > 0 {
+			status = ue.Status
+		}
+		msg = ue.Message
+	}
+	errCode, label, detail := classifyUpstreamError(status, sanitizeError(msg, key.Key))
+	cleanMsg := sanitizeError(fmt.Sprintf("%s (%d): %s", label, status, detail), key.Key)
+	if status == http.StatusBadRequest && errCode != "invalid_key" && errCode != "credit_exhausted" {
+		g.pool.RecordLog(RequestLog{
+			Provider:       prov.ID,
+			ProviderName:   prov.Name,
+			KeyIndex:       key.ProviderIndex,
+			KeyMasked:      key.Masked,
+			ClientName:     client.Name,
+			Scope:          scope,
+			RequestedModel: requestedModel,
+			UpstreamModel:  targetModel,
+			Status:         status,
+			RouteUs:        routeUs,
+			LatencyMs:      lat,
+			Stream:         stream,
+			Fallback:       fallback,
+			Attempts:       attempts,
+			ErrorCode:      errCode,
+			Error:          cleanMsg,
+		})
+		return true
+	}
+
+	var abortBad bool
+	if rotateModels && errCode != "invalid_key" && errCode != "permission_denied" && errCode != "credit_exhausted" && len(triedModels)+1 < len(prov.RotationModels) {
+		triedModels[targetModel] = true
+		g.pool.MarkModelCooldown(prov.ID, targetModel, int64(s.CooldownBaseSec))
+		delete(triedKeys, key.ID)
+	} else {
+		if rotateModels {
+			triedModels[targetModel] = true
+			g.pool.MarkModelCooldown(prov.ID, targetModel, int64(s.CooldownBaseSec))
+		}
+		abortBad, status, errCode, cleanMsg = g.handleUpstreamFailure(key, err)
+	}
+	g.pool.RecordLog(RequestLog{
+		Provider:       prov.ID,
+		ProviderName:   prov.Name,
+		KeyIndex:       key.ProviderIndex,
+		KeyMasked:      key.Masked,
+		ClientName:     client.Name,
+		Scope:          scope,
+		RequestedModel: requestedModel,
+		UpstreamModel:  targetModel,
+		Status:         status,
+		RouteUs:        routeUs,
+		LatencyMs:      lat,
+		Stream:         stream,
+		Fallback:       fallback,
+		Attempts:       attempts,
+		ErrorCode:      errCode,
+		Error:          cleanMsg,
+	})
+	return abortBad
 }

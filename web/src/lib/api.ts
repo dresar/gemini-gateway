@@ -10,6 +10,7 @@ import type {
   AddKeysResponse,
   ModelsCatalogResponse,
   NeonBackupMeta,
+  ProbeModelsResponse,
   ProviderInput,
   ProviderView,
   RouterConfig,
@@ -128,6 +129,16 @@ export function updateProvider(
 export function deleteProvider(id: string): Promise<{ ok: boolean }> {
   return request(`/api/providers/${encodeURIComponent(id)}`, {
     method: 'DELETE',
+  });
+}
+
+export function probeProviderModels(
+  id: string,
+  payload?: { models?: string[]; apply?: boolean }
+): Promise<ProbeModelsResponse> {
+  return request(`/api/providers/${encodeURIComponent(id)}/probe-models`, {
+    method: 'POST',
+    body: JSON.stringify(payload || { apply: true }),
   });
 }
 

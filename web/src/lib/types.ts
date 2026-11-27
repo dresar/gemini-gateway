@@ -1,5 +1,6 @@
 export type RotationMode = 'weighted' | 'priority' | 'model_prefix';
 export type ModelRoutingPolicy = 'auto_or_override' | 'always_rotate';
+export type ModelRotationMode = 'off' | 'round_robin' | 'random' | 'smart';
 export type KeySelectionMode = 'smart' | 'random' | 'lru_jitter' | 'round_robin';
 export type ThemeChoice = 'system' | 'light' | 'dark';
 export type APIType = 'openai' | 'gemini';
@@ -17,6 +18,8 @@ export interface ProviderInput {
   enabled: boolean;
   weight: number;
   priority: number;
+  model_rotation_enabled?: boolean;
+  rotation_models?: string[];
 }
 
 export interface ProviderView extends ProviderInput {
@@ -31,6 +34,7 @@ export interface ProviderView extends ProviderInput {
 export interface RouterConfig {
   rotation_mode: RotationMode;
   model_routing_policy: ModelRoutingPolicy;
+  model_rotation_mode: ModelRotationMode;
   key_selection: KeySelectionMode;
   cross_fallback: boolean;
   max_retries_per_provider: number;
@@ -40,6 +44,15 @@ export interface RouterConfig {
   host?: string;
   port?: string;
   db_path?: string;
+}
+
+export interface ProbeModelsResponse {
+  ok: boolean;
+  provider: ProviderView;
+  working_models: string[];
+  tested_count: number;
+  working_count: number;
+  duration_ms: number;
 }
 
 export interface BackupConfig {

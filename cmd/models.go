@@ -331,6 +331,9 @@ func (g *Gateway) buildModelsCatalog(ctx context.Context, scopeFilter, providerF
 		if pv.DefaultModel != "" {
 			appendItem(pv.DefaultModel, pv.DefaultModel, "Model default terkonfigurasi untuk provider "+pv.Name, pv.Name, "configured", 0, 0, 0, nil)
 		}
+		for _, rm := range pv.RotationModels {
+			appendItem(rm, rm, "Model rotasi aktif untuk provider "+pv.Name, pv.Name, "rotation", 0, 0, 0, nil)
+		}
 		for _, m := range pr.models {
 			appendItem(m.ID, m.DisplayName, m.Description, m.OwnedBy, "upstream", m.InputTokenLimit, m.OutputTokenLimit, m.ContextLength, m.Methods)
 		}

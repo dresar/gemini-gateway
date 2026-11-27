@@ -5,16 +5,20 @@ import { useCallback, useEffect, useState } from 'react';
 import {
   changeAdminPassword,
   listNeonBackups,
+  probeProviderModels,
   restoreNeonBackup,
   runNeonBackup,
   saveBackupConfig,
   saveConfig,
   testNeonConnection,
+  updateProvider,
 } from '@/lib/api';
 import { fmtDateTime, type PendingConfirm, StatusGlyph } from '@/lib/format';
 import type {
   BackupConfig,
+  ModelRotationMode,
   NeonBackupMeta,
+  ProviderView,
   RotationMode,
   RouterConfig,
   StatusResponse,
@@ -70,6 +74,9 @@ export function AturTab({
   const [showCurrentPw, setShowCurrentPw] = useState(false);
   const [showNewPw, setShowNewPw] = useState(false);
   const [apkDownloading, setApkDownloading] = useState(false);
+  const [modelTextMap, setModelTextMap] = useState<Record<string, string>>({});
+  const [modelRotMap, setModelRotMap] = useState<Record<string, boolean>>({});
+  const [probingProvId, setProbingProvId] = useState<string>('');
 
   useEffect(() => {
     if (statusData?.config && !cfgDraft) {
@@ -79,7 +86,65 @@ export function AturTab({
       setBackupAutoDraft(statusData.backup.auto_backup);
       setBackupIntervalDraft(statusData.backup.interval_days || 7);
     }
+    if (statusData?.providers) {
+      setModelTextMap((prev) => {
+        const next = { ...prev };
+        for (const p of statusData.providers) {
+          if (next[p.id] === undefined) {
+            next[p.id] = (p.rotation_models || []).join(', ');
+          }
+        }
+        return next;
+      });
+      setModelRotMap((prev) => {
+        const next = { ...prev };
+        for (const p of statusData.providers) {
+          if (next[p.id] === undefined) {
+            next[p.id] = Boolean(p.model_rotation_enabled);
+          }
+        }
+        return next;
+      });
+    }
   }, [statusData, cfgDraft]);
+
+  const handleSaveProviderRotation = async (p: ProviderView) => {
+    const models = (modelTextMap[p.id] || '')
+      .split(/[\n,]+/)
+      .map((s) => s.trim())
+      .filter(Boolean);
+    onSetBusy(true);
+    try {
+      await updateProvider(p.id, {
+        ...p,
+        model_rotation_enabled: Boolean(modelRotMap[p.id]),
+        rotation_models: models,
+      });
+      await onReload();
+      onToast(`Rotasi model ${p.name} disimpan (${models.length} model)`);
+    } catch (err) {
+      onToast(err instanceof Error ? err.message : 'Gagal simpan rotasi model', 'err');
+    } finally {
+      onSetBusy(false);
+    }
+  };
+
+  const handleQuickProbeProvider = async (p: ProviderView) => {
+    setProbingProvId(p.id);
+    try {
+      const res = await probeProviderModels(p.id, { apply: true });
+      setModelTextMap((prev) => ({ ...prev, [p.id]: (res.working_models || []).join(', ') }));
+      setModelRotMap((prev) => ({ ...prev, [p.id]: (res.working_models || []).length > 0 }));
+      await onReload();
+      onToast(
+        `${p.name}: ${res.working_count}/${res.tested_count} model aktif (${res.duration_ms}ms)`
+      );
+    } catch (err) {
+      onToast(err instanceof Error ? err.message : 'Gagal cek model', 'err');
+    } finally {
+      setProbingProvId('');
+    }
+  };
 
   const handleLoadSnapshots = useCallback(async () => {
     try {
@@ -323,6 +388,25 @@ export function AturTab({
               </div>
             </div>
 
+            <div className="field">
+              <label htmlFor="cfg-modrot">Rotasi Model (Per Provider)</label>
+              <select
+                id="cfg-modrot"
+                value={cfgDraft.model_rotation_mode || 'round_robin'}
+                onChange={(e) =>
+                  setCfgDraft({
+                    ...cfgDraft,
+                    model_rotation_mode: e.target.value as ModelRotationMode,
+                  })
+                }
+              >
+                <option value="round_robin">Giliran (Round Robin)</option>
+                <option value="smart">Pintar (LRU + Sehat)</option>
+                <option value="random">Acak</option>
+                <option value="off">Nonaktif (Pakai Default Saja)</option>
+              </select>
+            </div>
+
             <label className="switch-row">
               <span>Auto Fallback</span>
               <input
@@ -338,6 +422,64 @@ export function AturTab({
               </button>
             </div>
           </form>
+        ) : null}
+
+        {statusData?.providers?.length ? (
+          <div style={{ marginTop: '1.1rem', paddingTop: '0.9rem', borderTop: '1px solid var(--border)' }}>
+            <h3 className="card-title" style={{ fontSize: '0.92rem', marginBottom: '0.65rem' }}>
+              Daftar Model Rotasi per Provider
+            </h3>
+            <div className="list-stack">
+              {statusData.providers.map((p) => (
+                <div key={p.id} className="item-card" style={{ padding: '0.7rem' }}>
+                  <div className="item-top" style={{ marginBottom: '0.45rem' }}>
+                    <strong>{p.name}</strong>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.82rem' }}>
+                      <input
+                        type="checkbox"
+                        checked={Boolean(modelRotMap[p.id])}
+                        onChange={(e) =>
+                          setModelRotMap((prev) => ({ ...prev, [p.id]: e.target.checked }))
+                        }
+                      />
+                      <span>Rotasi Aktif</span>
+                    </label>
+                  </div>
+                  <div className="field" style={{ marginBottom: '0.5rem' }}>
+                    <textarea
+                      rows={2}
+                      placeholder="Pisahkan dengan koma atau baris baru (kosongkan lalu klik Cek Cepat)"
+                      value={modelTextMap[p.id] ?? ''}
+                      onChange={(e) =>
+                        setModelTextMap((prev) => ({ ...prev, [p.id]: e.target.value }))
+                      }
+                      autoCorrect="off"
+                      autoCapitalize="none"
+                      spellCheck={false}
+                    />
+                  </div>
+                  <div className="item-actions">
+                    <button
+                      type="button"
+                      className="neu-btn neu-btn-sm"
+                      disabled={busy || probingProvId === p.id}
+                      onClick={() => void handleQuickProbeProvider(p)}
+                    >
+                      {probingProvId === p.id ? 'Mengecek...' : 'Cek Cepat Model'}
+                    </button>
+                    <button
+                      type="button"
+                      className="neu-btn neu-btn-sm"
+                      disabled={busy || probingProvId === p.id}
+                      onClick={() => void handleSaveProviderRotation(p)}
+                    >
+                      Simpan Daftar
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
         ) : null}
       </section>
 

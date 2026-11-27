@@ -61,9 +61,13 @@ func (p *KeyPool) CreateProvider(pr Provider) (Provider, error) {
 	if pr.Enabled {
 		enInt = 1
 	}
+	rotEnInt := 0
+	if pr.ModelRotationEnabled {
+		rotEnInt = 1
+	}
 	if _, err := p.db.Exec(
-		`INSERT INTO providers(id,name,category,api_type,auth_mode,base_url,default_model,icon,enabled,weight,priority,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`,
-		pr.ID, pr.Name, pr.Category, pr.APIType, pr.AuthMode, pr.BaseURL, pr.DefaultModel, pr.Icon, enInt, pr.Weight, pr.Priority, pr.CreatedAt,
+		`INSERT INTO providers(id,name,category,api_type,auth_mode,base_url,default_model,icon,enabled,weight,priority,model_rotation_enabled,rotation_models,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		pr.ID, pr.Name, pr.Category, pr.APIType, pr.AuthMode, pr.BaseURL, pr.DefaultModel, pr.Icon, enInt, pr.Weight, pr.Priority, rotEnInt, encodeRotationModels(pr.RotationModels), pr.CreatedAt,
 	); err != nil {
 		return Provider{}, err
 	}
@@ -95,9 +99,13 @@ func (p *KeyPool) UpdateProvider(id string, next Provider) (Provider, bool, erro
 	if next.Enabled {
 		enInt = 1
 	}
+	rotEnInt := 0
+	if next.ModelRotationEnabled {
+		rotEnInt = 1
+	}
 	if _, err := p.db.Exec(
-		`UPDATE providers SET name=?,category=?,api_type=?,auth_mode=?,base_url=?,default_model=?,icon=?,enabled=?,weight=?,priority=? WHERE id=?`,
-		next.Name, next.Category, next.APIType, next.AuthMode, next.BaseURL, next.DefaultModel, next.Icon, enInt, next.Weight, next.Priority, id,
+		`UPDATE providers SET name=?,category=?,api_type=?,auth_mode=?,base_url=?,default_model=?,icon=?,enabled=?,weight=?,priority=?,model_rotation_enabled=?,rotation_models=? WHERE id=?`,
+		next.Name, next.Category, next.APIType, next.AuthMode, next.BaseURL, next.DefaultModel, next.Icon, enInt, next.Weight, next.Priority, rotEnInt, encodeRotationModels(next.RotationModels), id,
 	); err != nil {
 		return Provider{}, true, err
 	}
@@ -652,4 +660,109 @@ func (p *KeyPool) UpdateSettings(next RouterSettings) (RouterSettings, error) {
 	}
 	p.settings = next
 	return p.settings, nil
+}
+
+func encodeRotationModels(models []string) string {
+	clean := normalizeRotationModelList(models)
+	b, err := json.Marshal(clean)
+	if err != nil {
+		return "[]"
+	}
+	return string(b)
+}
+
+func decodeRotationModels(raw string) []string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return []string{}
+	}
+	var out []string
+	if err := json.Unmarshal([]byte(raw), &out); err != nil {
+		return []string{}
+	}
+	return normalizeRotationModelList(out)
+}
+
+func modelCooldownKey(provID, model string) string {
+	return provID + "\x00" + strings.ToLower(strings.TrimSpace(model))
+}
+
+func (p *KeyPool) SelectProviderModel(provID string, tried map[string]bool) string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	pr, ok := p.providerByID[provID]
+	if !ok {
+		return ""
+	}
+	pool := normalizeRotationModelList(pr.RotationModels)
+	if len(pool) == 0 {
+		if tried != nil && tried[pr.DefaultModel] {
+			return ""
+		}
+		return pr.DefaultModel
+	}
+	now := time.Now().Unix()
+	var ready []string
+	var cooling []string
+	for _, m := range pool {
+		if tried != nil && tried[m] {
+			continue
+		}
+		cdUntil := p.modelCooldown[modelCooldownKey(provID, m)]
+		if cdUntil <= now {
+			ready = append(ready, m)
+		} else {
+			cooling = append(cooling, m)
+		}
+	}
+	candidates := ready
+	if len(candidates) == 0 {
+		candidates = cooling
+		if len(candidates) > 1 {
+			sort.SliceStable(candidates, func(i, j int) bool {
+				return p.modelCooldown[modelCooldownKey(provID, candidates[i])] < p.modelCooldown[modelCooldownKey(provID, candidates[j])]
+			})
+		}
+	}
+	if len(candidates) == 0 {
+		return ""
+	}
+	var chosen string
+	switch p.settings.ModelRotationMode {
+	case "random":
+		chosen = candidates[mathrand.Intn(len(candidates))]
+	case "smart":
+		if len(ready) > 0 {
+			sort.SliceStable(ready, func(i, j int) bool {
+				return p.modelLastUsed[modelCooldownKey(provID, ready[i])] < p.modelLastUsed[modelCooldownKey(provID, ready[j])]
+			})
+			chosen = ready[0]
+		} else {
+			chosen = candidates[0]
+		}
+	default:
+		cur := p.modelCursor[provID] % len(candidates)
+		chosen = candidates[cur]
+		p.modelCursor[provID] = (cur + 1) % len(candidates)
+	}
+	p.modelLastUsed[modelCooldownKey(provID, chosen)] = time.Now().UnixNano()
+	return chosen
+}
+
+func (p *KeyPool) MarkModelCooldown(provID, model string, sec int64) {
+	if provID == "" || strings.TrimSpace(model) == "" || sec <= 0 {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.modelCooldown[modelCooldownKey(provID, model)] = time.Now().Unix() + sec
+}
+
+func (p *KeyPool) MarkModelOK(provID, model string) {
+	if provID == "" || strings.TrimSpace(model) == "" {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	delete(p.modelCooldown, modelCooldownKey(provID, model))
 }

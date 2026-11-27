@@ -315,9 +315,13 @@ func (p *KeyPool) applyBackupSnapshot(snap BackupSnapshot) error {
 		if pr.Enabled {
 			en = 1
 		}
+		rotEn := 0
+		if pr.ModelRotationEnabled {
+			rotEn = 1
+		}
 		_, _ = tx.Exec(
-			`INSERT INTO providers(id,name,category,api_type,auth_mode,base_url,default_model,icon,enabled,weight,priority,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`,
-			pr.ID, pr.Name, normalizeCategory(pr.Category), pr.APIType, pr.AuthMode, pr.BaseURL, pr.DefaultModel, pr.Icon, en, pr.Weight, pr.Priority, pr.CreatedAt,
+			`INSERT INTO providers(id,name,category,api_type,auth_mode,base_url,default_model,icon,enabled,weight,priority,model_rotation_enabled,rotation_models,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			pr.ID, pr.Name, normalizeCategory(pr.Category), pr.APIType, pr.AuthMode, pr.BaseURL, pr.DefaultModel, pr.Icon, en, pr.Weight, pr.Priority, rotEn, encodeRotationModels(pr.RotationModels), pr.CreatedAt,
 		)
 	}
 	for _, k := range snap.ProviderKeys {

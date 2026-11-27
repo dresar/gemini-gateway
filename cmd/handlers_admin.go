@@ -1,12 +1,14 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -196,6 +198,7 @@ func (g *Gateway) handleStatus(w http.ResponseWriter, r *http.Request) {
 		"config": map[string]any{
 			"rotation_mode":            s.RotationMode,
 			"model_routing_policy":     s.ModelRoutingPolicy,
+			"model_rotation_mode":      s.ModelRotationMode,
 			"key_selection":            s.KeySelection,
 			"cross_fallback":           s.CrossFallback,
 			"max_retries_per_provider": s.MaxRetriesPerProvider,
@@ -270,6 +273,11 @@ func (g *Gateway) handleProviderByID(w http.ResponseWriter, r *http.Request) {
 	id := strings.TrimPrefix(r.URL.Path, "/api/providers/")
 	if id == "" {
 		writeJSONError(w, http.StatusNotFound, "not found", "invalid_request_error")
+		return
+	}
+	if strings.HasSuffix(id, "/probe-models") {
+		provID := strings.TrimSuffix(id, "/probe-models")
+		g.handleProviderProbeModels(w, r, provID)
 		return
 	}
 	switch r.Method {
@@ -483,5 +491,161 @@ func (g *Gateway) handleChatTest(w http.ResponseWriter, r *http.Request) {
 		"attempts":      trace.Attempts,
 		"fallback":      trace.Fallback,
 		"reply":         reply,
+	})
+}
+
+func isChatModelProbeCandidate(apiType, id string, methods []string) bool {
+	lower := strings.ToLower(strings.TrimSpace(id))
+	if lower == "" {
+		return false
+	}
+	if apiType == apiTypeGemini && len(methods) > 0 {
+		hasGen := false
+		for _, m := range methods {
+			if m == "generateContent" {
+				hasGen = true
+				break
+			}
+		}
+		if !hasGen {
+			return false
+		}
+	}
+	for _, skip := range []string{
+		"embedding", "-tts", "-image", "image-", "video-", "lyria",
+		"nano-banana", "antigravity-preview", "deep-research", "computer-use",
+		"robotics-er", "-transcribe", "aqa", "whisper", "rerank", "-sys1", "sys1-",
+	} {
+		if strings.Contains(lower, skip) {
+			return false
+		}
+	}
+	return true
+}
+
+func (g *Gateway) handleProviderProbeModels(w http.ResponseWriter, r *http.Request, provID string) {
+	if r.Method != http.MethodPost {
+		writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed", "invalid_request_error")
+		return
+	}
+	prov, ok := g.pool.GetProvider(provID)
+	if !ok {
+		writeJSONError(w, http.StatusNotFound, "provider not found", "invalid_request_error")
+		return
+	}
+	var body struct {
+		Models []string `json:"models"`
+		Apply  *bool    `json:"apply"`
+	}
+	_ = json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&body)
+	applyChanges := true
+	if body.Apply != nil {
+		applyChanges = *body.Apply
+	}
+
+	var activeKeys []string
+	for _, kv := range g.pool.KeyViews() {
+		if kv.Provider == prov.ID && kv.Enabled && kv.Health != "dead" {
+			if snap, found := g.pool.GetKeySnapshot(kv.ID); found && snap.Key != "" {
+				activeKeys = append(activeKeys, snap.Key)
+			}
+		}
+	}
+	if len(activeKeys) == 0 {
+		writeJSONError(w, http.StatusBadRequest, "provider belum punya API key aktif", "invalid_request_error")
+		return
+	}
+
+	var candidates []string
+	if len(body.Models) > 0 {
+		candidates = normalizeRotationModelList(body.Models)
+	} else {
+		pv := ProviderView{Provider: prov}
+		discovered, _, _, errMsg := g.fetchUpstreamModels(r.Context(), pv)
+		if errMsg != "" && len(discovered) == 0 {
+			writeJSONError(w, http.StatusBadGateway, errMsg, "upstream_error")
+			return
+		}
+		seen := make(map[string]bool)
+		if prov.DefaultModel != "" {
+			seen[strings.ToLower(prov.DefaultModel)] = true
+			candidates = append(candidates, prov.DefaultModel)
+		}
+		for _, dm := range discovered {
+			if !isChatModelProbeCandidate(prov.APIType, dm.ID, dm.Methods) {
+				continue
+			}
+			k := strings.ToLower(dm.ID)
+			if !seen[k] {
+				seen[k] = true
+				candidates = append(candidates, dm.ID)
+			}
+		}
+	}
+	if len(candidates) == 0 {
+		writeJSONError(w, http.StatusBadRequest, "tidak ada kandidat model untuk diuji", "invalid_request_error")
+		return
+	}
+
+	start := time.Now()
+	results := make([]map[string]any, len(candidates))
+	workers := 8
+	if len(candidates) < workers {
+		workers = len(candidates)
+	}
+	ch := make(chan int, len(candidates))
+	for i := range candidates {
+		ch <- i
+	}
+	close(ch)
+
+	var wg sync.WaitGroup
+	for wIdx := 0; wIdx < workers; wIdx++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for idx := range ch {
+				m := candidates[idx]
+				rawKey := activeKeys[idx%len(activeKeys)]
+				pCtx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+				res := g.testKeyAgainstProvider(pCtx, prov, rawKey, m)
+				cancel()
+				res["model"] = m
+				results[idx] = res
+			}
+		}()
+	}
+	wg.Wait()
+
+	var working []string
+	seenWorking := make(map[string]bool)
+	for _, res := range results {
+		if okBool, _ := res["ok"].(bool); okBool {
+			m, _ := res["model"].(string)
+			lk := strings.ToLower(m)
+			if m != "" && !seenWorking[lk] {
+				seenWorking[lk] = true
+				working = append(working, m)
+			}
+		}
+	}
+
+	updated := prov
+	if applyChanges && len(working) > 0 {
+		prov.RotationModels = working
+		prov.ModelRotationEnabled = true
+		if u, found, err := g.pool.UpdateProvider(prov.ID, prov); err == nil && found {
+			updated = u
+		}
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok":             true,
+		"provider":       updated,
+		"working_models": working,
+		"tested_count":   len(candidates),
+		"working_count":  len(working),
+		"duration_ms":    time.Since(start).Milliseconds(),
+		"results":        results,
 	})
 }
