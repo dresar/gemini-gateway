@@ -616,7 +616,7 @@ export function AturTab({
               onClick={() =>
                 onConfirm({
                   title: 'Restore Backup',
-                  message: `Pulihkan snapshot #${selectedSnapshotId} ke SQLite?`,
+                  message: `Pulihkan snapshot #${selectedSnapshotId}?`,
                   confirmLabel: 'Restore',
                   run: async () => {
                     await restoreNeonBackup(selectedSnapshotId);

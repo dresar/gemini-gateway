@@ -60,7 +60,6 @@ export function HomeDashboardTab({
           <div className="pill-row" style={{ alignItems: 'center' }}>
             <span className="badge badge-ok">Online</span>
             <span className="badge badge-muted">v{statusData?.version || '4.1.0'}</span>
-            <span className="badge badge-muted">{statusData?.storage || 'sqlite-wal'}</span>
           </div>
           <div className="pill-row">
             <button

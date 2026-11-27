@@ -47,7 +47,7 @@ export function DocsPage({
     },
     cli: {
       title: 'Eksekusi Cepat Terminal (geminigw CLI)',
-      cmd: `# Cek env semua AI agent otomatis\n./geminigw agent-env --url "${originURL}" --key "MASUKKAN_KEY_AKSES"\n\n# Eksekusi prompt langsung di terminal (<1ms rotasi SQLite)\n./geminigw exec "Ringkas kode ini" --model auto\necho "Buatkan bash backup" | ./geminigw ask --provider ${providers[0]?.id || 'gemini'}`,
+      cmd: `# Cek env semua AI agent otomatis\n./geminigw agent-env --url "${originURL}" --key "MASUKKAN_KEY_AKSES"\n\n# Eksekusi prompt langsung di terminal (<1ms rotasi)\n./geminigw exec "Ringkas kode ini" --model auto\necho "Buatkan bash backup" | ./geminigw ask --provider ${providers[0]?.id || 'gemini'}`,
     },
   };
 
@@ -83,7 +83,7 @@ export function DocsPage({
           <div className="neu-inset-box">
             <strong>2. Upstream Key</strong>
             <div className="kpi-sub">
-              Masukkan 1 atau banyak API Key ke provider. Key dirotasi langsung dari RAM + SQLite WAL dalam mikrodetik.
+              Masukkan 1 atau banyak API Key ke provider. Key dirotasi langsung dari RAM dalam mikrodetik.
             </div>
           </div>
           <div className="neu-inset-box">

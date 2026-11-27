@@ -317,7 +317,7 @@ export function UsageCostCard({
 
       {byModelWithCost.length > 0 ? (
         <details className="acc-details" open>
-          <summary>Rincian per Model ({byModelWithCost.length} model · disimpan SQLite s.d. 365 hari)</summary>
+          <summary>Rincian per Model ({byModelWithCost.length} model · riwayat s.d. 365 hari)</summary>
           <div className="acc-body">
             <div className="table-scroll">
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.8rem' }}>
@@ -369,7 +369,7 @@ export function UsageCostCard({
 
       {(report?.daily?.length || 0) > 0 ? (
         <details className="acc-details" style={{ marginTop: '0.65rem' }}>
-          <summary>Riwayat Harian SQLite ({report?.daily.length || 0} hari tercatat)</summary>
+          <summary>Riwayat Harian ({report?.daily.length || 0} hari tercatat)</summary>
           <div className="acc-body">
             <div className="table-scroll" style={{ maxHeight: '240px', overflowY: 'auto' }}>
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.78rem' }}>

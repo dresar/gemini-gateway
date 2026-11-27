@@ -161,7 +161,6 @@ func (g *Gateway) handleHealth(w http.ResponseWriter, r *http.Request) {
 		"name":       "karouter",
 		"version":    gatewayVersion,
 		"uptime_sec": time.Now().Unix() - g.startedAt,
-		"storage":    "sqlite-wal",
 		"pool":       g.pool.HealthSummary(),
 	})
 }
@@ -192,7 +191,6 @@ func (g *Gateway) handleStatus(w http.ResponseWriter, r *http.Request) {
 		"version":    gatewayVersion,
 		"uptime_sec": time.Now().Unix() - g.startedAt,
 		"started_at": g.startedAt,
-		"storage":    "sqlite-wal",
 		"db_path":    g.cfg.DBPath,
 		"stats":      stats,
 		"pool":       g.pool.HealthSummary(),
